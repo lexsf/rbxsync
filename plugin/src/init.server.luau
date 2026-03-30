@@ -752,9 +752,25 @@ local function extractGame(config: {any})
         end
     end
 
-    -- First pass: serialize all chunks
-    local serializedChunks = {}
+    -- Pipeline: serialize and send each chunk immediately to avoid Lua memory spike
+    -- Instead of two passes (serialize all, then send all), we serialize each chunk
+    -- and dispatch it right away with a concurrency limit for backpressure.
+    local MAX_CONCURRENT = 5
+    local activeRequests = 0
+    local completedChunks = 0
+    local failedChunk = false
+
     for chunkIndex = 0, totalChunks - 1 do
+        -- Wait if at concurrency limit (backpressure)
+        while activeRequests >= MAX_CONCURRENT do
+            task.wait(0.05)
+        end
+
+        if failedChunk then
+            break
+        end
+
+        -- Serialize this chunk
         local startIdx = chunkIndex * CHUNK_SIZE + 1
         local endIdx = math.min(startIdx + CHUNK_SIZE - 1, #allInstances)
 
@@ -784,44 +800,26 @@ local function extractGame(config: {any})
                 table.insert(chunkInstances, serialized)
             end
         end
-        serializedChunks[chunkIndex] = chunkInstances
 
-        -- Yield periodically to avoid script timeout on large games (RBXSYNC-25)
-        if chunkIndex % 10 == 0 then
-            task.wait()
-        end
-    end
+        -- Yield after serialization to avoid script timeout on large games (RBXSYNC-25)
+        task.wait()
 
-    -- Second pass: send chunks in parallel with concurrency limit
-    local MAX_CONCURRENT = 5
-    local activeRequests = 0
-    local completedChunks = 0
-    local failedChunk = false
-
-    for chunkIndex = 0, totalChunks - 1 do
-        -- Wait if at concurrency limit
-        while activeRequests >= MAX_CONCURRENT do
-            task.wait(0.01)
-        end
-
-        if failedChunk then
-            break
-        end
-
+        -- Send immediately (don't accumulate in memory)
         activeRequests = activeRequests + 1
         task.spawn(function()
-            local success = sendChunk(sessionId, chunkIndex, totalChunks, serializedChunks[chunkIndex], projectDir)
-            if not success then
+            local success = sendChunk(sessionId, chunkIndex, totalChunks, chunkInstances, projectDir)
+            activeRequests = activeRequests - 1
+            if success then
+                completedChunks = completedChunks + 1
+            else
                 failedChunk = true
             end
-            completedChunks = completedChunks + 1
-            activeRequests = activeRequests - 1
         end)
     end
 
-    -- Wait for all chunks to complete
+    -- Wait for remaining in-flight requests
     while completedChunks < totalChunks and not failedChunk do
-        task.wait(0.01)
+        task.wait(0.05)
     end
 
     if failedChunk then
