@@ -4039,6 +4039,18 @@ async fn handle_bot_move(
     State(state): State<Arc<AppState>>,
     Json(req): Json<BotMoveRequest>,
 ) -> impl IntoResponse {
+    // Validate: at least one of position or objectName must be provided
+    let has_object = req.object_name.is_some() || req.object.is_some();
+    if req.position.is_none() && !has_object {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "success": false,
+                "error": "Must provide either 'position' ({x, y, z}) or 'objectName' (string)"
+            })),
+        );
+    }
+
     // Format command for BotController.executeCommand()
     // BotController expects: { type, command, args }
     let command = if req.position.is_some() {

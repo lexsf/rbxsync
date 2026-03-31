@@ -702,6 +702,25 @@ impl RbxSyncServer {
         &self,
         Parameters(params): Parameters<BotMoveParams>,
     ) -> Result<CallToolResult, McpError> {
+        // Validate: at least one of position or objectName must be provided
+        if params.position.is_none() && params.object_name.is_none() {
+            return Ok(CallToolResult::error(vec![Content::text(
+                "Error: Must provide either 'position' ({x, y, z}) or 'objectName' (string)."
+            )]));
+        }
+
+        // Validate position format if provided
+        if let Some(ref pos) = params.position {
+            let valid = pos.get("x").and_then(|v| v.as_f64()).is_some()
+                && pos.get("y").and_then(|v| v.as_f64()).is_some()
+                && pos.get("z").and_then(|v| v.as_f64()).is_some();
+            if !valid {
+                return Ok(CallToolResult::error(vec![Content::text(
+                    "Error: position must be an object with numeric x, y, z fields. Example: {\"x\": 0, \"y\": 5, \"z\": 0}"
+                )]));
+            }
+        }
+
         let result = self.client
             .bot_move(params.position, params.object_name.as_deref())
             .await
