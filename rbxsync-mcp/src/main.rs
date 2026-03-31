@@ -49,6 +49,14 @@ pub struct SyncParams {
     pub delete: Option<bool>,
 }
 
+/// Parameters for diff tool
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct DiffParams {
+    /// The project directory to diff
+    #[schemars(description = "Project directory to compare local files vs Studio state")]
+    pub project_dir: String,
+}
+
 /// Parameters for git_commit tool
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct GitCommitParams {
@@ -467,6 +475,48 @@ impl RbxSyncServer {
                 errors
             ))]))
         }
+    }
+
+    /// Compare local project files against Studio state.
+    /// Shows what instances exist locally but not in Studio (added),
+    /// what exists in Studio but not locally (removed), and unchanged count.
+    #[tool(description = "Diff local project files vs Studio state - shows added, removed, and unchanged instances")]
+    async fn diff(
+        &self,
+        Parameters(params): Parameters<DiffParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let diff = self.client
+            .get_diff(&params.project_dir)
+            .await
+            .map_err(|e| mcp_error(e.to_string()))?;
+
+        let mut lines = Vec::new();
+        lines.push(format!(
+            "Diff: {} added, {} removed, {} unchanged",
+            diff.added.len(),
+            diff.removed.len(),
+            diff.unchanged
+        ));
+
+        if !diff.added.is_empty() {
+            lines.push(String::new());
+            lines.push(format!("Added ({}):", diff.added.len()));
+            for entry in &diff.added {
+                let class = entry.class_name.as_deref().unwrap_or("?");
+                lines.push(format!("  + [{}] {}", class, entry.path));
+            }
+        }
+
+        if !diff.removed.is_empty() {
+            lines.push(String::new());
+            lines.push(format!("Removed ({}):", diff.removed.len()));
+            for entry in &diff.removed {
+                let class = entry.class_name.as_deref().unwrap_or("?");
+                lines.push(format!("  - [{}] {}", class, entry.path));
+            }
+        }
+
+        Ok(CallToolResult::success(vec![Content::text(lines.join("\n"))]))
     }
 
     /// Get the git status of a project directory.
