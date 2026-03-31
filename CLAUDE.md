@@ -90,6 +90,11 @@ All tasks are tracked in Linear (linear.app/smokestack-games).
 
 When completing work, reference the issue: `Fixes RBXSYNC-XX`
 
+### Linear MCP Tool Prefix
+
+**ALWAYS use `mcp__linear-server__*` tools** (e.g., `mcp__linear-server__create_issue`).
+**NEVER use `mcp__linear-audioscape__*`** — that is a different organization's workspace.
+
 ---
 
 ## Agent Teams
@@ -164,6 +169,10 @@ When running with `rbxsync serve`, these MCP tools are available:
 
 ---
 
+- **Testing standard:** See `docs/testing.md` for debug logging and test verification guidelines.
+
+---
+
 ## Contact
 
 - **Linear:** linear.app/smokestack-games
@@ -172,4 +181,4 @@ When running with `rbxsync serve`, these MCP tools are available:
 
 ---
 
-*Last updated: 2026-02-10*
+*Last updated: 2026-02-13*
