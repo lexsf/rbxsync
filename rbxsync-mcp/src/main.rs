@@ -10,6 +10,7 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 pub mod luau_helpers;
 mod tools;
+use luau_helpers::{escape_luau_string, luau_navigate_snippet, validate_luau_identifier};
 use tools::RbxSyncClient;
 
 /// RbxSync MCP Server - provides tools for extracting and syncing Roblox games
@@ -345,6 +346,47 @@ pub struct FindInstancesParams {
     pub parent: Option<String>,
     /// Maximum number of results to return (default: 100, max: 1000)
     #[schemars(description = "Max results (default: 100, max: 1000)")]
+    pub limit: Option<u32>,
+}
+
+/// Parameters for get_tags tool
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct GetTagsParams {
+    /// Instance path (e.g., "Workspace/MyPart")
+    #[schemars(description = "Instance path (e.g., 'Workspace/MyPart')")]
+    pub path: String,
+}
+
+/// Parameters for add_tag tool
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct AddTagParams {
+    /// Instance path (e.g., "Workspace/MyPart")
+    #[schemars(description = "Instance path (e.g., 'Workspace/MyPart')")]
+    pub path: String,
+    /// Tag to add
+    #[schemars(description = "Tag name to add")]
+    pub tag: String,
+}
+
+/// Parameters for remove_tag tool
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct RemoveTagParams {
+    /// Instance path (e.g., "Workspace/MyPart")
+    #[schemars(description = "Instance path (e.g., 'Workspace/MyPart')")]
+    pub path: String,
+    /// Tag to remove
+    #[schemars(description = "Tag name to remove")]
+    pub tag: String,
+}
+
+/// Parameters for get_tagged tool
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct GetTaggedParams {
+    /// Tag to search for
+    #[schemars(description = "Tag name to search for")]
+    pub tag: String,
+    /// Maximum results (default: 100)
+    #[schemars(description = "Max results (default: 100)")]
     pub limit: Option<u32>,
 }
 
@@ -1269,6 +1311,130 @@ impl RbxSyncServer {
                 result.data
             ))]))
         }
+    }
+
+    // ========================================================================
+    // CollectionService Tag Management Tools (Issue #133)
+    // ========================================================================
+
+    /// Get all tags on an instance.
+    #[tool(description = "List all tags on an instance")]
+    async fn get_tags(
+        &self,
+        Parameters(params): Parameters<GetTagsParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let navigate = luau_navigate_snippet(&params.path);
+        let path_escaped = escape_luau_string(&params.path);
+
+        let code = format!(
+            "{navigate}\n\
+            local CollectionService = game:GetService(\"CollectionService\")\n\
+            if not target then return \"Error: Instance not found at path: {path}\" end\n\
+            local tags = CollectionService:GetTags(target)\n\
+            if #tags == 0 then return \"No tags on \" .. target:GetFullName() end\n\
+            return \"Tags on \" .. target:GetFullName() .. \" (\" .. #tags .. \"):\\n\" .. table.concat(tags, \"\\n\")",
+            navigate = navigate,
+            path = path_escaped,
+        );
+
+        let result = self.client.run_code(&code).await.map_err(|e| mcp_error(e.to_string()))?;
+        Ok(CallToolResult::success(vec![Content::text(result)]))
+    }
+
+    /// Add a tag to an instance.
+    #[tool(description = "Add a tag to an instance")]
+    async fn add_tag(
+        &self,
+        Parameters(params): Parameters<AddTagParams>,
+    ) -> Result<CallToolResult, McpError> {
+        validate_luau_identifier(&params.tag).map_err(|e| {
+            mcp_error(format!("Invalid tag name: {}", e))
+        })?;
+
+        let navigate = luau_navigate_snippet(&params.path);
+        let path_escaped = escape_luau_string(&params.path);
+        let tag_escaped = escape_luau_string(&params.tag);
+
+        let code = format!(
+            "{navigate}\n\
+            local CollectionService = game:GetService(\"CollectionService\")\n\
+            if not target then return \"Error: Instance not found at path: {path}\" end\n\
+            CollectionService:AddTag(target, \"{tag}\")\n\
+            return \"Added tag '{tag}' to \" .. target:GetFullName()",
+            navigate = navigate,
+            path = path_escaped,
+            tag = tag_escaped,
+        );
+
+        let result = self.client.run_code(&code).await.map_err(|e| mcp_error(e.to_string()))?;
+        Ok(CallToolResult::success(vec![Content::text(result)]))
+    }
+
+    /// Remove a tag from an instance.
+    #[tool(description = "Remove a tag from an instance")]
+    async fn remove_tag(
+        &self,
+        Parameters(params): Parameters<RemoveTagParams>,
+    ) -> Result<CallToolResult, McpError> {
+        validate_luau_identifier(&params.tag).map_err(|e| {
+            mcp_error(format!("Invalid tag name: {}", e))
+        })?;
+
+        let navigate = luau_navigate_snippet(&params.path);
+        let path_escaped = escape_luau_string(&params.path);
+        let tag_escaped = escape_luau_string(&params.tag);
+
+        let code = format!(
+            "{navigate}\n\
+            local CollectionService = game:GetService(\"CollectionService\")\n\
+            if not target then return \"Error: Instance not found at path: {path}\" end\n\
+            if not CollectionService:HasTag(target, \"{tag}\") then\n\
+                return \"Tag '{tag}' not found on \" .. target:GetFullName()\n\
+            end\n\
+            CollectionService:RemoveTag(target, \"{tag}\")\n\
+            return \"Removed tag '{tag}' from \" .. target:GetFullName()",
+            navigate = navigate,
+            path = path_escaped,
+            tag = tag_escaped,
+        );
+
+        let result = self.client.run_code(&code).await.map_err(|e| mcp_error(e.to_string()))?;
+        Ok(CallToolResult::success(vec![Content::text(result)]))
+    }
+
+    /// Find all instances with a specific tag.
+    /// Useful for understanding game structure — e.g., find all "Enemy" or "Collectible" instances.
+    #[tool(description = "Find all instances with a specific tag")]
+    async fn get_tagged(
+        &self,
+        Parameters(params): Parameters<GetTaggedParams>,
+    ) -> Result<CallToolResult, McpError> {
+        validate_luau_identifier(&params.tag).map_err(|e| {
+            mcp_error(format!("Invalid tag name: {}", e))
+        })?;
+
+        let tag_escaped = escape_luau_string(&params.tag);
+        let limit = params.limit.unwrap_or(100).min(500);
+
+        let code = format!(
+            "local CollectionService = game:GetService(\"CollectionService\")\n\
+            local instances = CollectionService:GetTagged(\"{tag}\")\n\
+            if #instances == 0 then return \"No instances found with tag '{tag}'\" end\n\
+            local results = {{}}\n\
+            local limit = {limit}\n\
+            for i, inst in instances do\n\
+                if i > limit then break end\n\
+                table.insert(results, inst:GetFullName() .. \" [\" .. inst.ClassName .. \"]\")\n\
+            end\n\
+            local header = \"Found \" .. #instances .. \" instances with tag '{tag}'\"\n\
+            if #instances > limit then header = header .. \" (showing first \" .. limit .. \")\" end\n\
+            return header .. \":\\n\" .. table.concat(results, \"\\n\")",
+            tag = tag_escaped,
+            limit = limit,
+        );
+
+        let result = self.client.run_code(&code).await.map_err(|e| mcp_error(e.to_string()))?;
+        Ok(CallToolResult::success(vec![Content::text(result)]))
     }
 
     // ========================================================================
