@@ -331,6 +331,12 @@ fn mcp_error(msg: impl Into<String>) -> McpError {
     }
 }
 
+impl Default for RbxSyncServer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[tool_router]
 impl RbxSyncServer {
     pub fn new() -> Self {

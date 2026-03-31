@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use serde::{Deserialize, Serialize};
 
 /// Check if debug mode is enabled via RBXSYNC_DEBUG env var
@@ -881,6 +883,7 @@ impl RbxSyncClient {
     }
 
     /// Update or create a feature
+    #[allow(clippy::too_many_arguments)]
     pub async fn harness_feature_update(
         &self,
         project_dir: &str,
