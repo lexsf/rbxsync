@@ -312,6 +312,20 @@ pub async fn start_file_watcher(
 
                         if let Some(kind) = kind {
                             let path = path.clone();
+
+                            // Skip system directories to prevent infinite recursion (RBXSYNC-141)
+                            let is_system = path.components().any(|c| {
+                                if let std::path::Component::Normal(name) = c {
+                                    let s = name.to_string_lossy();
+                                    s.starts_with(".rbxsync") || s == ".git"
+                                } else {
+                                    false
+                                }
+                            });
+                            if is_system {
+                                continue;
+                            }
+
                             // Check if it's a directory that was created (for undo operations)
                             if kind == FileChangeKind::Create && path.is_dir() {
                                 // Scan directory for script files and send Create events for each
