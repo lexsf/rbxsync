@@ -3932,6 +3932,27 @@ async fn send_bot_command_via_queue(
     state: &Arc<AppState>,
     command: serde_json::Value,
 ) -> Result<serde_json::Value, (StatusCode, Json<serde_json::Value>)> {
+    // Check playtest is active before queuing (avoids 30s silent timeout)
+    let is_active = state
+        .playtest_active
+        .load(std::sync::atomic::Ordering::Relaxed);
+    let heartbeat_stale = {
+        let heartbeat = state.last_bot_heartbeat.read().await;
+        heartbeat
+            .map(|h| h.elapsed().as_secs_f64() > 5.0)
+            .unwrap_or(true)
+    };
+
+    if !is_active || heartbeat_stale {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "success": false,
+                "error": "No active playtest. Start a playtest first using run_test with background: true."
+            })),
+        ));
+    }
+
     let id = Uuid::new_v4();
 
     // Queue the command with ID
