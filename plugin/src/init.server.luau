@@ -1171,7 +1171,8 @@ local function syncRename(payload: any): {success: boolean, error: string?, acti
         instance:SetAttribute("_rbxsync_source", newPath)
     end
 
-    -- Re-register the instance under the new path
+    -- Deregister the old path and re-register under the new path
+    Sync.unregisterPath(oldPath)
     Sync.registerCreated(newPath, instance)
 
     -- Mark paths as applied for deduplication
@@ -1224,7 +1225,7 @@ local function syncBatch(payload: any): {success: boolean, results: {any}?, erro
         local bDepth = select(2, string.gsub(bPath, "/", "")) + 1
 
         -- Creates first, then updates, then deletes
-        local typePriority = { create = 1, update = 2, delete = 3 }
+        local typePriority = { create = 1, rename = 2, update = 2, delete = 3 }
         local aPriority = typePriority[aType] or 2
         local bPriority = typePriority[bType] or 2
 
