@@ -355,6 +355,34 @@ pub struct ExtractionSession {
     pub finalized: bool,
 }
 
+/// Read all chunk files from disk and return the combined instances.
+///
+/// Note: If a chunk write failed partway (e.g., disk full), `chunks_received` may have been
+/// incremented but the file may not exist on disk. Missing or unparseable chunks are logged
+/// with `tracing::warn` and skipped rather than causing an error.
+fn read_chunks_from_disk(output_dir: &str, count: usize) -> Vec<serde_json::Value> {
+    let mut all_instances = Vec::new();
+    for i in 0..count {
+        let chunk_path = format!("{}/chunk_{:06}.json", output_dir, i);
+        match std::fs::read_to_string(&chunk_path) {
+            Ok(data) => {
+                match serde_json::from_str::<serde_json::Value>(&data) {
+                    Ok(chunk) => {
+                        if let Some(instances) = chunk.as_array() {
+                            all_instances.extend(instances.iter().cloned());
+                        } else {
+                            all_instances.push(chunk);
+                        }
+                    }
+                    Err(e) => tracing::warn!("Failed to parse chunk {}: {}", i, e),
+                }
+            }
+            Err(e) => tracing::warn!("Failed to read chunk {}: {}", i, e),
+        }
+    }
+    all_instances
+}
+
 /// Connected Studio place information
 #[derive(Debug, Clone, Serialize)]
 pub struct PlaceInfo {
@@ -1491,26 +1519,18 @@ async fn handle_extract_export(
     let session = state.extraction_session.read().await;
 
     if let Some(ref s) = *session {
-        // Read chunk data from disk instead of memory
-        let mut all_instances: Vec<serde_json::Value> = Vec::new();
-        for i in 0..s.chunks_received {
-            let chunk_path = format!("{}/chunk_{:06}.json", &s.output_dir, i);
-            match std::fs::read_to_string(&chunk_path) {
-                Ok(data) => {
-                    match serde_json::from_str::<serde_json::Value>(&data) {
-                        Ok(chunk) => {
-                            if let Some(instances) = chunk.as_array() {
-                                all_instances.extend(instances.iter().cloned());
-                            } else {
-                                all_instances.push(chunk);
-                            }
-                        }
-                        Err(e) => tracing::warn!("Failed to parse chunk {}: {}", i, e),
-                    }
-                }
-                Err(e) => tracing::warn!("Failed to read chunk {}: {}", i, e),
-            }
+        // Guard: output_dir is empty until the first chunk arrives via handle_extract_chunk
+        if s.output_dir.is_empty() {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({
+                    "success": false,
+                    "error": "No chunk data available yet (output_dir not initialized)"
+                })),
+            );
         }
+
+        let all_instances = read_chunks_from_disk(&s.output_dir, s.chunks_received);
 
         tracing::info!("Exporting {} instances to {}", all_instances.len(), req.output_path);
 
@@ -1756,6 +1776,18 @@ async fn handle_extract_finalize(
     }
 
     let session = session_guard.as_ref().unwrap();
+
+    // Guard: output_dir is empty until the first chunk arrives via handle_extract_chunk
+    if session.output_dir.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "success": false,
+                "error": "No chunk data available yet (output_dir not initialized)"
+            })),
+        );
+    }
+
     let src_dir = PathBuf::from(&req.project_dir).join("src");
 
     // Load project config and tree mapping
@@ -1788,25 +1820,7 @@ async fn handle_extract_finalize(
     }
 
     // Read chunk data from disk BEFORE backup/rename (chunks are stored in output_dir)
-    let mut all_instances: Vec<serde_json::Value> = Vec::new();
-    for i in 0..session.chunks_received {
-        let chunk_path = format!("{}/chunk_{:06}.json", &session.output_dir, i);
-        match std::fs::read_to_string(&chunk_path) {
-            Ok(data) => {
-                match serde_json::from_str::<serde_json::Value>(&data) {
-                    Ok(chunk) => {
-                        if let Some(instances) = chunk.as_array() {
-                            all_instances.extend(instances.iter().cloned());
-                        } else {
-                            all_instances.push(chunk);
-                        }
-                    }
-                    Err(e) => tracing::warn!("Failed to parse chunk {}: {}", i, e),
-                }
-            }
-            Err(e) => tracing::warn!("Failed to read chunk {}: {}", i, e),
-        }
-    }
+    let all_instances = read_chunks_from_disk(&session.output_dir, session.chunks_received);
 
     // Backup existing src directory before clearing (for undo support)
     let backup_dir = PathBuf::from(&req.project_dir).join(".rbxsync-backup");
