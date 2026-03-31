@@ -20,6 +20,7 @@ pub struct RbxSyncClient {
 }
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 pub struct HealthResponse {
     #[serde(default)]
     pub status: String,
@@ -28,6 +29,7 @@ pub struct HealthResponse {
 }
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 pub struct ExtractStartResponse {
     #[serde(rename = "sessionId")]
     pub session_id: String,
@@ -35,6 +37,7 @@ pub struct ExtractStartResponse {
 }
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 pub struct ExtractStatusResponse {
     #[serde(rename = "sessionId")]
     pub session_id: String,
@@ -47,6 +50,7 @@ pub struct ExtractStatusResponse {
 }
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 pub struct ExtractFinalizeResponse {
     pub success: bool,
     #[serde(rename = "filesWritten")]
@@ -58,12 +62,14 @@ pub struct ExtractFinalizeResponse {
 }
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 pub struct SyncReadTreeResponse {
     pub instances: Vec<serde_json::Value>,  // Raw JSON instances
     pub count: i32,
 }
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 pub struct IncrementalSyncResponse {
     pub success: bool,
     pub instances: Vec<serde_json::Value>,
@@ -96,6 +102,7 @@ pub fn build_sync_operations(instances: Vec<serde_json::Value>) -> Vec<serde_jso
 }
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 pub struct SyncBatchResult {
     pub success: bool,
     #[serde(default)]
@@ -103,6 +110,7 @@ pub struct SyncBatchResult {
 }
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 pub struct SyncBatchResponseData {
     #[serde(default)]
     pub success: bool,
@@ -120,6 +128,7 @@ pub struct SyncBatchResponseData {
 }
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 pub struct SyncBatchResponse {
     pub success: bool,
     #[serde(default)]
@@ -142,6 +151,7 @@ pub struct ChangedFile {
 
 /// Git status from server (matches server's GitStatus struct)
 #[derive(Debug, Default, Deserialize)]
+#[allow(dead_code)]
 pub struct ServerGitStatus {
     pub branch: String,
     #[serde(default)]
@@ -186,6 +196,7 @@ pub struct RunCodeResponse {
 
 // Test runner types
 #[derive(Debug, Serialize)]
+#[allow(dead_code)]
 pub struct TestRunParams {
     pub duration: Option<u32>,
     pub mode: Option<String>,
@@ -208,6 +219,7 @@ pub struct ConsoleMessage {
 }
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 pub struct TestStatusResponse {
     #[serde(rename = "inProgress", default)]
     pub in_progress: bool,
@@ -222,6 +234,7 @@ pub struct TestStatusResponse {
 }
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 pub struct TestFinishResponse {
     #[serde(default)]
     pub success: bool,
@@ -248,6 +261,7 @@ pub struct TestStopResponse {
 /// Note: Server returns PluginResponse which has id, success, data, error
 /// The `data` field contains the actual response payload
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 pub struct CommandResponse<T> {
     pub success: bool,
     #[serde(default)]
@@ -261,6 +275,7 @@ pub struct CommandResponse<T> {
 
 /// Raw plugin response for flexible parsing
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 pub struct RawPluginResponse {
     pub success: bool,
     #[serde(default)]
@@ -282,12 +297,14 @@ pub struct InsertModelResponse {
 }
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 pub struct DiffEntry {
     pub path: String,
     pub class_name: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 pub struct DiffResponse {
     pub added: Vec<DiffEntry>,
     pub removed: Vec<DiffEntry>,
@@ -373,6 +390,7 @@ impl RbxSyncClient {
         Ok(resp)
     }
 
+    #[allow(dead_code)]
     pub async fn read_tree(&self, project_dir: &str) -> anyhow::Result<SyncReadTreeResponse> {
         let resp = self
             .client
@@ -881,6 +899,7 @@ impl RbxSyncClient {
     }
 
     /// Update or create a feature
+    #[allow(clippy::too_many_arguments)]
     pub async fn harness_feature_update(
         &self,
         project_dir: &str,
@@ -1141,6 +1160,7 @@ pub struct SessionSummary {
 
 /// Response with harness status
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 #[serde(rename_all = "camelCase")]
 pub struct HarnessStatusResponse {
     #[serde(default)]

@@ -3925,62 +3925,6 @@ async fn send_bot_command_via_queue(
     }
 }
 
-/// Helper function to send a bot command to the plugin
-async fn send_bot_command(
-    state: &Arc<AppState>,
-    command: &str,
-    payload: serde_json::Value,
-) -> Result<serde_json::Value, (StatusCode, Json<serde_json::Value>)> {
-    let request_id = Uuid::new_v4();
-    let request = PluginRequest {
-        id: request_id,
-        command: command.to_string(),
-        payload,
-    };
-
-    // Create response channel
-    let (tx, mut rx) = mpsc::unbounded_channel();
-    state.response_channels.write().await.insert(request_id, tx);
-
-    // Queue the request
-    state.request_queue.lock().await.push_back(request);
-    state.trigger.send(()).ok();
-
-    // Wait for response with timeout (longer timeout for movement commands)
-    let timeout = if command == "bot:move" {
-        tokio::time::Duration::from_secs(60)
-    } else {
-        tokio::time::Duration::from_secs(30)
-    };
-
-    match tokio::time::timeout(timeout, rx.recv()).await {
-        Ok(Some(response)) => {
-            state.response_channels.write().await.remove(&request_id);
-            Ok(response.data)
-        }
-        Ok(None) => {
-            state.response_channels.write().await.remove(&request_id);
-            Err((
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({
-                    "success": false,
-                    "error": "Channel closed"
-                })),
-            ))
-        }
-        Err(_) => {
-            state.response_channels.write().await.remove(&request_id);
-            Err((
-                StatusCode::REQUEST_TIMEOUT,
-                Json(serde_json::json!({
-                    "success": false,
-                    "error": "Bot command timeout - ensure playtest is running"
-                })),
-            ))
-        }
-    }
-}
-
 /// Handle generic bot command
 async fn handle_bot_command(
     State(state): State<Arc<AppState>>,
