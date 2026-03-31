@@ -118,14 +118,14 @@ pub async fn start_file_watcher(
         let mut pending_rename_from: Option<(PathBuf, Instant)> = None;
 
         // Helper: determine if a path should be processed based on extension/kind
-        let should_process_path = |path: &PathBuf, kind: &FileChangeKind, src_dir: &PathBuf| -> bool {
+        let should_process_path = |path: &PathBuf, kind: &FileChangeKind| -> bool {
             if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
                 ext == "luau" || ext == "rbxjson"
             } else {
                 // For deletions and renames, also handle directories (no extension)
                 let is_delete_like = matches!(kind, FileChangeKind::Delete | FileChangeKind::Rename { .. });
                 if is_delete_like {
-                    let is_inside_src = path.strip_prefix(src_dir)
+                    let is_inside_src = path.strip_prefix(&src_dir)
                         .map(|rel| !rel.as_os_str().is_empty())
                         .unwrap_or(false);
                     is_inside_src && path.file_name()
@@ -145,7 +145,7 @@ pub async fn start_file_watcher(
                 if timestamp.elapsed() > Duration::from_millis(100) {
                     let kind = FileChangeKind::Delete;
                     let path = from_path.clone();
-                    if should_process_path(&path, &kind, &src_dir) {
+                    if should_process_path(&path, &kind) {
                         if !sync_packages && is_package_path(&path) {
                             tracing::trace!("Skipping package path (sync_packages=false): {:?}", path);
                         } else {
@@ -165,6 +165,8 @@ pub async fn start_file_watcher(
                 }
             }
 
+            // Reduced from 1s to 50ms to ensure timely flushing of buffered rename-from events.
+            // Trade-off: ~20 wakeups/sec idle vs 1/sec, acceptable for a file watcher.
             match rx.recv_timeout(Duration::from_millis(50)) {
                 Ok(event) => {
                     // Handle RenameMode::Both at event level (some platforms deliver both paths in one event)
@@ -180,7 +182,7 @@ pub async fn start_file_watcher(
                                 continue;
                             }
 
-                            if should_process_path(&to_path, &kind, &src_dir) || should_process_path(&from_path, &FileChangeKind::Delete, &src_dir) {
+                            if should_process_path(&to_path, &kind) || should_process_path(&from_path, &FileChangeKind::Delete) {
                                 let change = FileChange {
                                     path: to_path,
                                     project_dir: project_dir_clone.clone(),
@@ -231,7 +233,7 @@ pub async fn start_file_watcher(
                                                     } else {
                                                         // Stale From - flush as Delete, then handle To
                                                         let delete_kind = FileChangeKind::Delete;
-                                                        if should_process_path(&from_path, &delete_kind, &src_dir)
+                                                        if should_process_path(&from_path, &delete_kind)
                                                             && (sync_packages || !is_package_path(&from_path))
                                                         {
                                                             let change = FileChange {
@@ -342,7 +344,7 @@ pub async fn start_file_watcher(
                             }
 
                             // Check if it's a file we care about
-                            if should_process_path(&path, &kind, &src_dir) {
+                            if should_process_path(&path, &kind) {
                                 let change = FileChange {
                                     path: path.clone(),
                                     project_dir: project_dir_clone.clone(),

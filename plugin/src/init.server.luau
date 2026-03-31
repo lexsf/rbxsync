@@ -1164,6 +1164,11 @@ local function syncRename(payload: any): {success: boolean, error: string?, acti
 
     -- Extract new name from the last segment of newPath
     local newName = string.match(newPath, "[^/]+$") or newPath
+    -- Strip rbxsync file extensions to get the instance name
+    newName = newName:gsub("%.server%.luau$", "")
+        :gsub("%.client%.luau$", "")
+        :gsub("%.luau$", "")
+        :gsub("%.rbxjson$", "")
     instance.Name = newName
 
     -- Update the source attribute if it exists
