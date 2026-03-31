@@ -1144,6 +1144,49 @@ local function syncDelete(payload: any): {success: boolean, error: string?, acti
     end
 end
 
+-- Sync: Rename instance at path
+local function syncRename(payload: any): {success: boolean, error: string?, action: string?}
+    local data = payload.data
+    if not data then
+        return { success = false, error = "Missing data in rename operation" }
+    end
+
+    local oldPath = data.oldPath
+    local newPath = data.newPath
+    if not oldPath or not newPath then
+        return { success = false, error = "Missing oldPath or newPath in rename operation" }
+    end
+
+    local instance = Sync.findInstanceAtPath(oldPath)
+    if not instance then
+        return { success = false, error = "Instance not found at " .. oldPath }
+    end
+
+    -- Extract new name from the last segment of newPath
+    local newName = string.match(newPath, "[^/]+$") or newPath
+    -- Strip rbxsync file extensions to get the instance name
+    newName = newName:gsub("%.server%.luau$", "")
+        :gsub("%.client%.luau$", "")
+        :gsub("%.luau$", "")
+        :gsub("%.rbxjson$", "")
+    instance.Name = newName
+
+    -- Update the source attribute if it exists
+    if instance:GetAttribute("_rbxsync_source") then
+        instance:SetAttribute("_rbxsync_source", newPath)
+    end
+
+    -- Deregister the old path and re-register under the new path
+    Sync.unregisterPath(oldPath)
+    Sync.registerCreated(newPath, instance)
+
+    -- Mark paths as applied for deduplication
+    ChangeTracker.markPathApplied(oldPath)
+    ChangeTracker.markPathApplied(newPath)
+
+    return { success = true, action = "renamed" }
+end
+
 -- Sync: Apply batch of operations
 local function syncBatch(payload: any): {success: boolean, results: {any}?, error: string?, applied: number?, skipped: number?}
     local operations = payload.operations
@@ -1187,7 +1230,7 @@ local function syncBatch(payload: any): {success: boolean, results: {any}?, erro
         local bDepth = select(2, string.gsub(bPath, "/", "")) + 1
 
         -- Creates first, then updates, then deletes
-        local typePriority = { create = 1, update = 2, delete = 3 }
+        local typePriority = { create = 1, rename = 2, update = 2, delete = 3 }
         local aPriority = typePriority[aType] or 2
         local bPriority = typePriority[bType] or 2
 
@@ -1274,6 +1317,8 @@ local function syncBatch(payload: any): {success: boolean, results: {any}?, erro
                 result = syncUpdate(op)
             elseif opType == "delete" then
                 result = syncDelete(op)
+            elseif opType == "rename" then
+                result = syncRename(op)
             else
                 result = { success = false, error = "Unknown operation" }
             end
