@@ -542,8 +542,8 @@ async fn handle_register(
 
         for stale_key in stale_keys {
             if let Some(info) = registry.remove(&stale_key) {
-                tracing::info!(
-                    "Removed stale session for place {}: {} (old key: {})",
+                tracing::debug!(
+                    "Replaced stale session for place {}: {} (old key: {})",
                     req.place_name,
                     info.session_id.unwrap_or_default(),
                     stale_key
@@ -663,7 +663,7 @@ async fn cleanup_stale_registrations(state: &Arc<AppState>) {
 
     for key in &stale_keys {
         if let Some(info) = registry.remove(key) {
-            tracing::info!("Removed stale registration: {} ({})", info.place_name, key);
+            tracing::debug!("Removed stale registration: {} ({})", info.place_name, key);
         }
     }
 }
@@ -1074,7 +1074,7 @@ async fn cleanup_stale_vscode_workspaces(state: &Arc<AppState>) {
 
     for key in &stale_keys {
         workspaces.remove(key);
-        tracing::info!("Removed stale VS Code workspace: {}", key);
+        tracing::debug!("Removed stale VS Code workspace: {}", key);
     }
 }
 
