@@ -3,8 +3,8 @@
 //! HTTP server that communicates with the Roblox Studio plugin
 //! for game extraction and synchronization.
 
-pub mod git;
 pub mod file_watcher;
+pub mod git;
 pub mod harness;
 
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -52,10 +52,11 @@ fn apply_tree_mapping(datamodel_path: &str, tree_mapping: &HashMap<String, Strin
 
     for (dm_prefix, fs_prefix) in tree_mapping {
         if (datamodel_path == dm_prefix || datamodel_path.starts_with(&format!("{}/", dm_prefix)))
-            && dm_prefix.len() > best_len {
-                best_match = Some((dm_prefix.as_str(), fs_prefix.as_str()));
-                best_len = dm_prefix.len();
-            }
+            && dm_prefix.len() > best_len
+        {
+            best_match = Some((dm_prefix.as_str(), fs_prefix.as_str()));
+            best_len = dm_prefix.len();
+        }
     }
 
     if let Some((dm_prefix, fs_prefix)) = best_match {
@@ -71,7 +72,13 @@ fn apply_tree_mapping(datamodel_path: &str, tree_mapping: &HashMap<String, Strin
 }
 
 /// Directories to skip during recursive copy operations
-const SKIP_DIRS: &[&str] = &[".rbxsync-trash", ".rbxsync-backup", ".rbxsync", ".git", "node_modules"];
+const SKIP_DIRS: &[&str] = &[
+    ".rbxsync-trash",
+    ".rbxsync-backup",
+    ".rbxsync",
+    ".git",
+    "node_modules",
+];
 
 /// Recursively copy a directory, skipping system directories and
 /// preventing circular copies (dst inside src).
@@ -112,10 +119,11 @@ fn apply_reverse_tree_mapping(fs_path: &str, tree_mapping: &HashMap<String, Stri
 
     for (dm_prefix, fs_prefix) in tree_mapping {
         if (fs_path == fs_prefix || fs_path.starts_with(&format!("{}/", fs_prefix)))
-            && fs_prefix.len() > best_len {
-                best_match = Some((dm_prefix.as_str(), fs_prefix.as_str()));
-                best_len = fs_prefix.len();
-            }
+            && fs_prefix.len() > best_len
+        {
+            best_match = Some((dm_prefix.as_str(), fs_prefix.as_str()));
+            best_len = fs_prefix.len();
+        }
     }
 
     if let Some((dm_prefix, fs_prefix)) = best_match {
@@ -199,9 +207,9 @@ pub struct VsCodeWorkspace {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConsoleMessage {
     pub timestamp: String,
-    pub message_type: String,  // "info", "warn", "error"
+    pub message_type: String, // "info", "warn", "error"
     pub message: String,
-    pub source: Option<String>,  // e.g., "sync", "extract", "plugin"
+    pub source: Option<String>, // e.g., "sync", "extract", "plugin"
 }
 
 /// Max console messages to keep in buffer
@@ -223,8 +231,8 @@ pub struct OperationInfo {
     pub op_type: OperationType,
     pub project_dir: String,
     #[serde(rename = "startTime")]
-    pub start_time: u64,  // Unix timestamp in millis
-    pub progress: Option<String>,  // Optional progress message
+    pub start_time: u64, // Unix timestamp in millis
+    pub progress: Option<String>, // Optional progress message
 }
 
 /// Shared application state
@@ -313,7 +321,7 @@ impl AppState {
     pub fn new() -> Arc<Self> {
         let (trigger, trigger_rx) = watch::channel(());
         let (file_change_tx, file_change_rx) = mpsc::unbounded_channel();
-        let (console_tx, _) = broadcast::channel(100);  // Buffer 100 messages for slow subscribers
+        let (console_tx, _) = broadcast::channel(100); // Buffer 100 messages for slow subscribers
         Arc::new(Self {
             request_queue: Mutex::new(VecDeque::new()),
             project_queues: RwLock::new(HashMap::new()),
@@ -325,7 +333,9 @@ impl AppState {
             trigger_rx,
             extraction_session: RwLock::new(None),
             live_sync_paused: std::sync::atomic::AtomicBool::new(false),
-            file_watcher_state: Arc::new(RwLock::new(file_watcher::FileWatcherState::new(file_change_tx))),
+            file_watcher_state: Arc::new(RwLock::new(file_watcher::FileWatcherState::new(
+                file_change_tx,
+            ))),
             file_change_rx: Mutex::new(file_change_rx),
             logged_vscode_workspaces: RwLock::new(HashSet::new()),
             logged_studio_places: RwLock::new(HashSet::new()),
@@ -417,18 +427,16 @@ fn read_chunks_from_disk(output_dir: &str, count: usize) -> Vec<serde_json::Valu
     for i in 0..count {
         let chunk_path = format!("{}/chunk_{:06}.json", output_dir, i);
         match std::fs::read_to_string(&chunk_path) {
-            Ok(data) => {
-                match serde_json::from_str::<serde_json::Value>(&data) {
-                    Ok(chunk) => {
-                        if let Some(instances) = chunk.as_array() {
-                            all_instances.extend(instances.iter().cloned());
-                        } else {
-                            all_instances.push(chunk);
-                        }
+            Ok(data) => match serde_json::from_str::<serde_json::Value>(&data) {
+                Ok(chunk) => {
+                    if let Some(instances) = chunk.as_array() {
+                        all_instances.extend(instances.iter().cloned());
+                    } else {
+                        all_instances.push(chunk);
                     }
-                    Err(e) => tracing::warn!("Failed to parse chunk {}: {}", i, e),
                 }
-            }
+                Err(e) => tracing::warn!("Failed to parse chunk {}: {}", i, e),
+            },
             Err(e) => tracing::warn!("Failed to read chunk {}: {}", i, e),
         }
     }
@@ -442,7 +450,7 @@ pub struct PlaceInfo {
     pub place_name: String,
     pub project_dir: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub session_id: Option<String>,  // Unique session ID for this Studio instance
+    pub session_id: Option<String>, // Unique session ID for this Studio instance
     #[serde(skip)]
     pub last_heartbeat: Option<Instant>,
 }
@@ -456,7 +464,10 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         .route("/rbxsync/register", post(handle_register))
         .route("/rbxsync/unregister", post(handle_unregister))
         .route("/rbxsync/register-vscode", post(handle_register_vscode))
-        .route("/rbxsync/update-project-path", post(handle_update_project_path))
+        .route(
+            "/rbxsync/update-project-path",
+            post(handle_update_project_path),
+        )
         .route("/rbxsync/link-studio", post(handle_link_studio))
         .route("/rbxsync/unlink-studio", post(handle_unlink_studio))
         .route("/rbxsync/check-status", post(handle_check_status))
@@ -501,7 +512,10 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         .route("/playtest/output", get(handle_playtest_output))
         // Bot controller endpoints (AI-powered automated gameplay testing)
         .route("/bot/command", post(handle_bot_command))
-        .route("/bot/state", get(handle_bot_state).post(handle_bot_state_update))
+        .route(
+            "/bot/state",
+            get(handle_bot_state).post(handle_bot_state_update),
+        )
         .route("/bot/move", post(handle_bot_move))
         .route("/bot/action", post(handle_bot_action))
         .route("/bot/observe", post(handle_bot_observe))
@@ -535,9 +549,15 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         .route("/shutdown", post(handle_shutdown))
         // Harness system for multi-session AI development
         .route("/harness/init", post(harness::handle_harness_init))
-        .route("/harness/session/start", post(harness::handle_session_start))
+        .route(
+            "/harness/session/start",
+            post(harness::handle_session_start),
+        )
         .route("/harness/session/end", post(harness::handle_session_end))
-        .route("/harness/feature/update", post(harness::handle_feature_update))
+        .route(
+            "/harness/feature/update",
+            post(harness::handle_feature_update),
+        )
         .route("/harness/status", post(harness::handle_harness_status))
         .with_state(state)
         // Allow large body sizes for extraction chunks (10MB limit)
@@ -572,7 +592,7 @@ pub struct RegisterRequest {
     pub place_name: String,
     pub project_dir: String,
     #[serde(default)]
-    pub session_id: Option<String>,  // Unique session ID for this Studio instance
+    pub session_id: Option<String>, // Unique session ID for this Studio instance
 }
 
 /// Handle Studio plugin registration
@@ -591,12 +611,15 @@ async fn handle_register(
         for (ws_dir, _) in workspaces.iter() {
             let config_path = PathBuf::from(ws_dir).join("rbxsync.json");
             if let Ok(config_str) = std::fs::read_to_string(&config_path) {
-                if let Ok(config) = serde_json::from_str::<rbxsync_core::ProjectConfig>(&config_str) {
+                if let Ok(config) = serde_json::from_str::<rbxsync_core::ProjectConfig>(&config_str)
+                {
                     if let Some(place_ids) = &config.place_ids {
                         if place_ids.contains(&req.place_id) {
                             tracing::info!(
                                 "Auto-linking place {} (PlaceId: {}) to project at {}",
-                                req.place_name, req.place_id, ws_dir
+                                req.place_name,
+                                req.place_id,
+                                ws_dir
                             );
                             auto_linked_dir = ws_dir.clone();
                             break;
@@ -606,7 +629,11 @@ async fn handle_register(
             }
         }
         drop(workspaces);
-        if auto_linked_dir.is_empty() { project_dir } else { auto_linked_dir }
+        if auto_linked_dir.is_empty() {
+            project_dir
+        } else {
+            auto_linked_dir
+        }
     } else {
         project_dir
     };
@@ -615,16 +642,17 @@ async fn handle_register(
 
     // Use session_id as unique key if provided (handles multiple unpublished places with PlaceId=0)
     // Fall back to place_id for backwards compatibility with older plugins
-    let key = req.session_id.clone().unwrap_or_else(|| req.place_id.to_string());
+    let key = req
+        .session_id
+        .clone()
+        .unwrap_or_else(|| req.place_id.to_string());
 
     // For published places (place_id > 0), remove any stale entries with the same place_id
     // but a different session_id. This prevents duplicates when Studio is closed and reopened.
     if req.place_id > 0 {
         let stale_keys: Vec<String> = registry
             .iter()
-            .filter(|(k, info)| {
-                info.place_id == req.place_id && *k != &key
-            })
+            .filter(|(k, info)| info.place_id == req.place_id && *k != &key)
             .map(|(k, _)| k.clone())
             .collect();
 
@@ -641,19 +669,24 @@ async fn handle_register(
     }
 
     // Register/update this place (replaces any existing entry for this session)
-    registry.insert(key.clone(), PlaceInfo {
-        place_id: req.place_id,
-        place_name: req.place_name.clone(),
-        project_dir: project_dir.clone(),
-        session_id: req.session_id.clone(),
-        last_heartbeat: Some(Instant::now()),
-    });
+    registry.insert(
+        key.clone(),
+        PlaceInfo {
+            place_id: req.place_id,
+            place_name: req.place_name.clone(),
+            project_dir: project_dir.clone(),
+            session_id: req.session_id.clone(),
+            last_heartbeat: Some(Instant::now()),
+        },
+    );
     drop(registry); // Release lock before acquiring another
 
     // Create project queue if it doesn't exist
     {
         let mut queues = state.project_queues.write().await;
-        queues.entry(project_dir.clone()).or_insert_with(VecDeque::new);
+        queues
+            .entry(project_dir.clone())
+            .or_insert_with(VecDeque::new);
     }
 
     // Only log once per session to prevent spam
@@ -692,9 +725,7 @@ async fn handle_register(
                     "   Extracted files will go to '{}', not your VS Code workspace!",
                     studio_dir
                 );
-                tracing::warn!(
-                    "   To fix: Open VS Code in the Studio project directory."
-                );
+                tracing::warn!("   To fix: Open VS Code in the Studio project directory.");
             }
         }
     }
@@ -711,7 +742,10 @@ async fn handle_unregister(
     Json(req): Json<RegisterRequest>,
 ) -> impl IntoResponse {
     // Use session_id as unique key if provided (matches register)
-    let key = req.session_id.clone().unwrap_or_else(|| req.place_id.to_string());
+    let key = req
+        .session_id
+        .clone()
+        .unwrap_or_else(|| req.place_id.to_string());
 
     let mut registry = state.place_registry.write().await;
     let removed = registry.remove(&key).is_some();
@@ -757,23 +791,24 @@ async fn cleanup_stale_registrations(state: &Arc<AppState>) {
 }
 
 /// List connected Studio places
-async fn handle_list_places(
-    State(state): State<Arc<AppState>>,
-) -> impl IntoResponse {
+async fn handle_list_places(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     // Clean up stale registrations first
     cleanup_stale_registrations(&state).await;
 
     let registry = state.place_registry.read().await;
-    let places: Vec<serde_json::Value> = registry.values().map(|p| {
-        let last_heartbeat_ago = p.last_heartbeat.map(|h| h.elapsed().as_secs_f64());
-        serde_json::json!({
-            "place_id": p.place_id,
-            "place_name": p.place_name,
-            "project_dir": p.project_dir,
-            "session_id": p.session_id,
-            "last_heartbeat_ago": last_heartbeat_ago,
+    let places: Vec<serde_json::Value> = registry
+        .values()
+        .map(|p| {
+            let last_heartbeat_ago = p.last_heartbeat.map(|h| h.elapsed().as_secs_f64());
+            serde_json::json!({
+                "place_id": p.place_id,
+                "place_name": p.place_name,
+                "project_dir": p.project_dir,
+                "session_id": p.session_id,
+                "last_heartbeat_ago": last_heartbeat_ago,
+            })
         })
-    }).collect();
+        .collect();
 
     Json(serde_json::json!({
         "places": places
@@ -804,10 +839,13 @@ async fn handle_register_vscode(
     // Update heartbeat timestamp
     let mut workspaces = state.vscode_workspaces.write().await;
     let is_new = !workspaces.contains_key(&workspace_dir);
-    workspaces.insert(workspace_dir.clone(), VsCodeWorkspace {
-        workspace_dir: workspace_dir.clone(),
-        last_heartbeat: Some(Instant::now()),
-    });
+    workspaces.insert(
+        workspace_dir.clone(),
+        VsCodeWorkspace {
+            workspace_dir: workspace_dir.clone(),
+            last_heartbeat: Some(Instant::now()),
+        },
+    );
     drop(workspaces); // Release lock before acquiring another
 
     // Only log and start file watcher if this is a new workspace this session
@@ -823,7 +861,8 @@ async fn handle_register_vscode(
         // Check for path mismatch with Studio registrations
         let registry = state.place_registry.read().await;
         if !registry.is_empty() {
-            let studio_dirs: Vec<&str> = registry.values().map(|p| p.project_dir.as_str()).collect();
+            let studio_dirs: Vec<&str> =
+                registry.values().map(|p| p.project_dir.as_str()).collect();
             let vscode_dir = workspace_dir.as_str();
 
             // Check if VS Code workspace matches or is parent/child of any Studio project
@@ -877,11 +916,13 @@ async fn handle_register_vscode(
             let sync_packages = packages_config
                 .and_then(|p| p.get("excludeFromWatch"))
                 .and_then(|v| v.as_bool())
-                .map(|exclude| !exclude)  // Invert: excludeFromWatch=false means sync_packages=true
-                .unwrap_or(false);  // Default: don't sync packages (for backwards compatibility)
+                .map(|exclude| !exclude) // Invert: excludeFromWatch=false means sync_packages=true
+                .unwrap_or(false); // Default: don't sync packages (for backwards compatibility)
 
             tokio::spawn(async move {
-                if let Err(e) = file_watcher::start_file_watcher(dir, watcher_state, sync_packages).await {
+                if let Err(e) =
+                    file_watcher::start_file_watcher(dir, watcher_state, sync_packages).await
+                {
                     tracing::error!("Failed to start file watcher: {}", e);
                 }
             });
@@ -944,7 +985,8 @@ async fn handle_update_project_path(
         for old_key in old_keys {
             if old_key != req.project_dir {
                 if let Some(commands) = queues.remove(&old_key) {
-                    queues.entry(req.project_dir.clone())
+                    queues
+                        .entry(req.project_dir.clone())
                         .or_insert_with(VecDeque::new)
                         .extend(commands);
                 }
@@ -975,7 +1017,8 @@ async fn handle_link_studio(
     let mut registry = state.place_registry.write().await;
 
     // Find the entry with matching place_id (key is now session_id, not place_id)
-    let target_key = registry.iter()
+    let target_key = registry
+        .iter()
         .find(|(_, place)| place.place_id as i64 == req.place_id)
         .map(|(key, _)| key.clone());
 
@@ -1041,7 +1084,8 @@ async fn handle_unlink_studio(
     let mut registry = state.place_registry.write().await;
 
     // Find the entry with matching place_id (key is now session_id, not place_id)
-    let target_key = registry.iter()
+    let target_key = registry
+        .iter()
         .find(|(_, place)| place.place_id == req.place_id)
         .map(|(key, _)| key.clone());
 
@@ -1109,9 +1153,7 @@ struct UndoExtractRequest {
     project_dir: String,
 }
 
-async fn handle_undo_extract(
-    Json(req): Json<UndoExtractRequest>,
-) -> impl IntoResponse {
+async fn handle_undo_extract(Json(req): Json<UndoExtractRequest>) -> impl IntoResponse {
     let src_dir = PathBuf::from(&req.project_dir).join("src");
     let backup_dir = PathBuf::from(&req.project_dir).join(".rbxsync-backup");
     let backup_src = backup_dir.join("src");
@@ -1176,9 +1218,7 @@ async fn cleanup_stale_vscode_workspaces(state: &Arc<AppState>) {
 }
 
 /// List registered VS Code workspace directories
-async fn handle_list_workspaces(
-    State(state): State<Arc<AppState>>,
-) -> impl IntoResponse {
+async fn handle_list_workspaces(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     // Clean up stale workspaces first
     cleanup_stale_vscode_workspaces(&state).await;
 
@@ -1195,9 +1235,7 @@ async fn handle_list_workspaces(
 }
 
 /// Handle server info request - provides CWD and VS Code workspaces for auto-populating project path
-async fn handle_server_info(
-    State(state): State<Arc<AppState>>,
-) -> impl IntoResponse {
+async fn handle_server_info(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let cwd = std::env::current_dir()
         .map(|p| p.to_string_lossy().to_string())
         .unwrap_or_default();
@@ -1298,7 +1336,10 @@ async fn handle_request_poll(
 
     // First check if there's already a request
     if let Some(request) = try_pop_request(&state, &params.session_id, &params.project_dir).await {
-        return (StatusCode::OK, Json(serde_json::to_value(&request).unwrap()));
+        return (
+            StatusCode::OK,
+            Json(serde_json::to_value(&request).unwrap()),
+        );
     }
 
     // Update heartbeat for all places matching this projectDir
@@ -1336,13 +1377,23 @@ async fn handle_response(
     State(state): State<Arc<AppState>>,
     Json(response): Json<PluginResponse>,
 ) -> impl IntoResponse {
-    tracing::info!("Received response for request {}: success={}", response.id, response.success);
+    tracing::info!(
+        "Received response for request {}: success={}",
+        response.id,
+        response.success
+    );
     let channels = state.response_channels.read().await;
     if let Some(sender) = channels.get(&response.id) {
-        tracing::info!("Found channel for request {}, sending response", response.id);
+        tracing::info!(
+            "Found channel for request {}, sending response",
+            response.id
+        );
         let _ = sender.send(response);
     } else {
-        tracing::warn!("No channel found for request {} - response dropped", response.id);
+        tracing::warn!(
+            "No channel found for request {} - response dropped",
+            response.id
+        );
     }
     Json(serde_json::json!({"ok": true}))
 }
@@ -1387,20 +1438,25 @@ async fn handle_extract_start(
     if let Some(ref project_dir) = req.project_dir {
         if !project_dir.is_empty() {
             let mut ops = state.operation_state.write().await;
-            ops.insert(project_dir.clone(), OperationInfo {
-                op_type: OperationType::Extract,
-                project_dir: project_dir.clone(),
-                start_time: std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map(|d| d.as_millis() as u64)
-                    .unwrap_or(0),
-                progress: Some("Starting extraction...".to_string()),
-            });
+            ops.insert(
+                project_dir.clone(),
+                OperationInfo {
+                    op_type: OperationType::Extract,
+                    project_dir: project_dir.clone(),
+                    start_time: std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_millis() as u64)
+                        .unwrap_or(0),
+                    progress: Some("Starting extraction...".to_string()),
+                },
+            );
         }
     }
 
     // Pause live sync during extraction to avoid syncing back files we just extracted
-    state.live_sync_paused.store(true, std::sync::atomic::Ordering::Relaxed);
+    state
+        .live_sync_paused
+        .store(true, std::sync::atomic::Ordering::Relaxed);
     tracing::info!("Live sync paused for extraction");
 
     // Clear any pending sync commands from queues to prevent them from interfering with extraction
@@ -1412,7 +1468,10 @@ async fn handle_extract_start(
         global_queue.retain(|req| !req.command.starts_with("sync:"));
         let removed = before_count - global_queue.len();
         if removed > 0 {
-            tracing::info!("Cleared {} pending sync commands from global queue before extraction", removed);
+            tracing::info!(
+                "Cleared {} pending sync commands from global queue before extraction",
+                removed
+            );
         }
     }
     {
@@ -1422,7 +1481,11 @@ async fn handle_extract_start(
             queue.retain(|req| !req.command.starts_with("sync:"));
             let removed = before_count - queue.len();
             if removed > 0 {
-                tracing::info!("Cleared {} pending sync commands from queue for {} before extraction", removed, project_dir);
+                tracing::info!(
+                    "Cleared {} pending sync commands from queue for {} before extraction",
+                    removed,
+                    project_dir
+                );
             }
         }
     }
@@ -1435,7 +1498,10 @@ async fn handle_extract_start(
             drained += 1;
         }
         if drained > 0 {
-            tracing::info!("Drained {} pending file change events before extraction", drained);
+            tracing::info!(
+                "Drained {} pending file change events before extraction",
+                drained
+            );
         }
     }
 
@@ -1467,7 +1533,9 @@ async fn handle_extract_start(
                     let _ = std::fs::remove_dir_all(&src_dir);
                 }
 
-                tracing::info!("Cleared src folder before extraction (backed up to .rbxsync-backup/src)");
+                tracing::info!(
+                    "Cleared src folder before extraction (backed up to .rbxsync-backup/src)"
+                );
             }
 
             // Create fresh src directory
@@ -1492,7 +1560,8 @@ async fn handle_extract_start(
         plugin_request,
         req.session_id.as_deref(),
         req.project_dir.as_deref(),
-    ).await;
+    )
+    .await;
     let _ = state.trigger.send(());
 
     Json(serde_json::json!({
@@ -1532,7 +1601,11 @@ async fn handle_extract_chunk(
 
         // Auto-create session if plugin started extraction directly
         if session_guard.is_none() {
-            tracing::info!("Auto-created extraction session: {} -> {}", &req.session_id, &output_dir);
+            tracing::info!(
+                "Auto-created extraction session: {} -> {}",
+                &req.session_id,
+                &output_dir
+            );
 
             // Create output directory for this session
             let _ = std::fs::create_dir_all(&output_dir);
@@ -1549,7 +1622,12 @@ async fn handle_extract_chunk(
         if let Some(ref mut session) = *session_guard {
             // Accept chunks from any session (plugin may have restarted)
             if session.id != req.session_id {
-                tracing::info!("Session ID changed from {} to {}, resetting -> {}", session.id, &req.session_id, &output_dir);
+                tracing::info!(
+                    "Session ID changed from {} to {}, resetting -> {}",
+                    session.id,
+                    &req.session_id,
+                    &output_dir
+                );
                 session.id = req.session_id.clone();
                 session.chunks_received = 0;
 
@@ -1562,7 +1640,11 @@ async fn handle_extract_chunk(
             session.total_chunks = Some(req.total_chunks);
             session.chunks_received += 1;
 
-            let chunk_path = format!("{}/chunk_{:06}.json", &output_dir, session.chunks_received - 1);
+            let chunk_path = format!(
+                "{}/chunk_{:06}.json",
+                &output_dir,
+                session.chunks_received - 1
+            );
             let chunks_received = session.chunks_received;
 
             // Serialize chunk data while we still own req.data
@@ -1592,12 +1674,10 @@ async fn handle_extract_chunk(
                 })),
             )
         }
-        Err(()) => {
-            (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({"error": "No active extraction session"})),
-            )
-        }
+        Err(()) => (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "No active extraction session"})),
+        ),
     }
 }
 
@@ -1607,7 +1687,10 @@ async fn handle_extract_status(State(state): State<Arc<AppState>>) -> impl IntoR
 
     if let Some(ref s) = *session {
         // Complete if finalized (handles 0 chunks case) OR all chunks received
-        let complete = s.finalized || s.total_chunks.map(|t| s.chunks_received >= t).unwrap_or(false);
+        let complete = s.finalized
+            || s.total_chunks
+                .map(|t| s.chunks_received >= t)
+                .unwrap_or(false);
         Json(serde_json::json!({
             "sessionId": s.id,
             "chunksReceived": s.chunks_received,
@@ -1649,7 +1732,11 @@ async fn handle_extract_export(
 
         let all_instances = read_chunks_from_disk(&s.output_dir, s.chunks_received);
 
-        tracing::info!("Exporting {} instances to {}", all_instances.len(), req.output_path);
+        tracing::info!(
+            "Exporting {} instances to {}",
+            all_instances.len(),
+            req.output_path
+        );
 
         // Write to file
         let output = serde_json::json!({
@@ -1658,7 +1745,10 @@ async fn handle_extract_export(
             "instances": all_instances,
         });
 
-        match std::fs::write(&req.output_path, serde_json::to_string_pretty(&output).unwrap()) {
+        match std::fs::write(
+            &req.output_path,
+            serde_json::to_string_pretty(&output).unwrap(),
+        ) {
             Ok(_) => {
                 tracing::info!("Export complete: {}", req.output_path);
                 (
@@ -1690,184 +1780,6 @@ async fn handle_extract_export(
             })),
         )
     }
-}
-
-/// Known Roblox services for project.json generation
-const KNOWN_SERVICES: &[(&str, &str)] = &[
-    ("Workspace", "Workspace"),
-    ("ServerScriptService", "ServerScriptService"),
-    ("ServerStorage", "ServerStorage"),
-    ("ReplicatedStorage", "ReplicatedStorage"),
-    ("ReplicatedFirst", "ReplicatedFirst"),
-    ("StarterGui", "StarterGui"),
-    ("StarterPack", "StarterPack"),
-    ("StarterPlayer", "StarterPlayer"),
-    ("StarterPlayerScripts", "StarterPlayerScripts"),
-    ("StarterCharacterScripts", "StarterCharacterScripts"),
-    ("Players", "Players"),
-    ("Lighting", "Lighting"),
-    ("SoundService", "SoundService"),
-    ("Chat", "Chat"),
-    ("LocalizationService", "LocalizationService"),
-    ("TestService", "TestService"),
-    ("Teams", "Teams"),
-    ("TextChatService", "TextChatService"),
-    ("VoiceChatService", "VoiceChatService"),
-];
-
-/// Generate tooling config files after extraction (RBXSYNC-83)
-///
-/// Generates:
-/// - default.project.json (Rojo-compatible for Luau LSP)
-/// - selene.toml (Selene linter config)
-/// - wally.toml (Wally package manager config)
-///
-/// Only generates files if they don't already exist.
-fn generate_tooling_files(project_dir: &str, service_folders: &HashSet<String>, config: &Option<serde_json::Value>) {
-    // Check if generation is disabled in config
-    let generate_enabled = config
-        .as_ref()
-        .and_then(|c| c.get("config"))
-        .and_then(|c| c.get("generateToolingFiles"))
-        .and_then(|v| v.as_bool())
-        .unwrap_or(true); // Default to true
-
-    if !generate_enabled {
-        tracing::info!("Tooling file generation disabled in config");
-        return;
-    }
-
-    let project_path = PathBuf::from(project_dir);
-    let src_dir = project_path.join("src");
-
-    // Get project name from config or directory name
-    let project_name = config
-        .as_ref()
-        .and_then(|c| c.get("name"))
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string())
-        .unwrap_or_else(|| {
-            project_path
-                .file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or("MyGame")
-                .to_string()
-        });
-
-    // Generate default.project.json
-    let project_json_path = project_path.join("default.project.json");
-    if !project_json_path.exists() && src_dir.exists() {
-        if let Ok(project_json) = generate_project_json(&project_name, &src_dir, service_folders) {
-            match std::fs::write(&project_json_path, project_json) {
-                Ok(_) => tracing::info!("Generated default.project.json"),
-                Err(e) => tracing::warn!("Failed to write default.project.json: {}", e),
-            }
-        }
-    }
-
-    // Generate selene.toml
-    let selene_toml_path = project_path.join("selene.toml");
-    if !selene_toml_path.exists() {
-        let selene_content = r#"std = "roblox"
-"#;
-        match std::fs::write(&selene_toml_path, selene_content) {
-            Ok(_) => tracing::info!("Generated selene.toml"),
-            Err(e) => tracing::warn!("Failed to write selene.toml: {}", e),
-        }
-    }
-
-    // Generate wally.toml
-    let wally_toml_path = project_path.join("wally.toml");
-    if !wally_toml_path.exists() {
-        // Sanitize project name for Wally (lowercase, alphanumeric + hyphens only)
-        let sanitized_name: String = project_name
-            .to_lowercase()
-            .chars()
-            .map(|c| if c.is_alphanumeric() || c == '-' { c } else { '-' })
-            .collect();
-        let wally_content = format!(
-            r#"[package]
-name = "your-username/{}"
-version = "0.1.0"
-registry = "https://github.com/UpliftGames/wally-index"
-realm = "shared"
-
-[dependencies]
-"#,
-            sanitized_name
-        );
-        match std::fs::write(&wally_toml_path, wally_content) {
-            Ok(_) => tracing::info!("Generated wally.toml"),
-            Err(e) => tracing::warn!("Failed to write wally.toml: {}", e),
-        }
-    }
-}
-
-/// Generate Rojo-compatible project.json content
-fn generate_project_json(project_name: &str, src_dir: &std::path::Path, service_folders: &HashSet<String>) -> Result<String, serde_json::Error> {
-    let mut tree = serde_json::json!({
-        "$className": "DataModel"
-    });
-
-    // Build service mapping from KNOWN_SERVICES
-    let service_map: HashMap<&str, &str> = KNOWN_SERVICES.iter().cloned().collect();
-
-    // Add each service folder to the tree
-    for service_name in service_folders {
-        let class_name = service_map.get(service_name.as_str());
-
-        // Handle StarterPlayer special case - check for child folders
-        if service_name == "StarterPlayer" {
-            let starter_player_dir = src_dir.join("StarterPlayer");
-            if starter_player_dir.exists() {
-                let mut sp_node = serde_json::json!({
-                    "$className": "StarterPlayer"
-                });
-
-                if let Ok(entries) = std::fs::read_dir(&starter_player_dir) {
-                    for entry in entries.flatten() {
-                        if entry.path().is_dir() {
-                            let child_name = entry.file_name().to_string_lossy().to_string();
-                            let child_class = service_map.get(child_name.as_str());
-                            if let Some(class) = child_class {
-                                sp_node[&child_name] = serde_json::json!({
-                                    "$className": class,
-                                    "$path": format!("src/StarterPlayer/{}", child_name)
-                                });
-                            } else {
-                                sp_node[&child_name] = serde_json::json!({
-                                    "$path": format!("src/StarterPlayer/{}", child_name)
-                                });
-                            }
-                        }
-                    }
-                }
-
-                tree[service_name] = sp_node;
-                continue;
-            }
-        }
-
-        // Regular service
-        if let Some(class) = class_name {
-            tree[service_name] = serde_json::json!({
-                "$className": class,
-                "$path": format!("src/{}", service_name)
-            });
-        } else {
-            tree[service_name] = serde_json::json!({
-                "$path": format!("src/{}", service_name)
-            });
-        }
-    }
-
-    let project = serde_json::json!({
-        "name": project_name,
-        "tree": tree,
-        "globIgnorePaths": ["**/node_modules"]
-    });
-
-    serde_json::to_string_pretty(&project)
 }
 
 /// Finalize extraction - build proper file tree from chunks
@@ -1905,7 +1817,9 @@ async fn handle_extract_finalize(
         );
     }
 
-    let src_dir = PathBuf::from(&req.project_dir).join("src");
+    let output_dir = session.output_dir.clone();
+    let chunks_received = session.chunks_received;
+    drop(session_guard);
 
     // Load project config and tree mapping
     let config = load_project_config(&req.project_dir);
@@ -1933,377 +1847,51 @@ async fn handle_extract_finalize(
         (false, "Packages".to_string())
     };
     if preserve_packages {
-        tracing::info!("Package preservation enabled - Packages folder: {}", packages_folder);
-    }
-
-    // Read chunk data from disk BEFORE backup/rename (chunks are stored in output_dir)
-    let all_instances = read_chunks_from_disk(&session.output_dir, session.chunks_received);
-
-    // Backup existing src directory before clearing (for undo support)
-    let backup_dir = PathBuf::from(&req.project_dir).join(".rbxsync-backup");
-    let backup_src = backup_dir.join("src");
-
-    // IMPORTANT: Back up terrain data BEFORE any directory operations
-    // Terrain is saved during extraction and must survive the src clear
-    let terrain_file = src_dir.join("Workspace").join("Terrain").join("terrain.rbxjson");
-    let terrain_data = if terrain_file.exists() {
-        tracing::info!("Backing up terrain.rbxjson before finalize");
-        std::fs::read_to_string(&terrain_file).ok()
-    } else {
-        None
-    };
-
-    if src_dir.exists() {
-        // Remove old backup if exists
-        if backup_src.exists() {
-            let _ = std::fs::remove_dir_all(&backup_src);
-        }
-        // Create backup directory
-        let _ = std::fs::create_dir_all(&backup_dir);
-        // Move src to backup (rename is atomic and fast)
-        if let Err(e) = std::fs::rename(&src_dir, &backup_src) {
-            // If rename fails (cross-device), fall back to copy+delete
-            tracing::warn!("Rename failed, falling back to copy: {}", e);
-            if let Err(e) = copy_dir_recursive(&src_dir, &backup_src) {
-                tracing::warn!("Failed to backup src directory: {}", e);
-            }
-
-            for entry in std::fs::read_dir(&src_dir).unwrap_or_else(|_| std::fs::read_dir(".").unwrap()).flatten() {
-                let path = entry.path();
-                if path.is_dir() {
-                    let _ = std::fs::remove_dir_all(&path);
-                } else {
-                    let _ = std::fs::remove_file(&path);
-                }
-            }
-        }
-        tracing::info!("Backed up src to .rbxsync-backup/src");
-    }
-
-    tracing::info!("Finalizing {} instances to {}", all_instances.len(), src_dir.display());
-
-    // Create src directory
-    let _ = std::fs::create_dir_all(&src_dir);
-
-    // Restore terrain data that was backed up before clearing
-    if let Some(data) = terrain_data {
-        let terrain_dir = src_dir.join("Workspace").join("Terrain");
-        let _ = std::fs::create_dir_all(&terrain_dir);
-        if std::fs::write(terrain_dir.join("terrain.rbxjson"), &data).is_ok() {
-            tracing::info!("Restored terrain.rbxjson after finalize");
-        }
-    }
-
-    // Track which services we've seen to create folders for them
-    let mut service_folders: std::collections::HashSet<String> = std::collections::HashSet::new();
-
-    // First pass: build a map from referenceId to disambiguated path
-    // This handles duplicate sibling names by appending a suffix
-    let mut path_to_count: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
-    let mut ref_to_path: std::collections::HashMap<String, String> = std::collections::HashMap::new();
-    let mut duplicate_count = 0;
-
-    for inst in &all_instances {
-        if let Some(path) = inst.get("path").and_then(|v| v.as_str()) {
-            if !path.is_empty() {
-                let ref_id = inst.get("referenceId").and_then(|v| v.as_str()).unwrap_or("");
-                let count = path_to_count.entry(path.to_string()).or_insert(0);
-                *count += 1;
-
-                // If this is a duplicate path, append a suffix
-                let disambiguated_path = if *count > 1 {
-                    // Use referenceId suffix for disambiguation (first 8 chars)
-                    let suffix = if ref_id.len() >= 8 { &ref_id[..8] } else { ref_id };
-                    let class_name = inst.get("className").and_then(|v| v.as_str()).unwrap_or("Unknown");
-                    tracing::warn!(
-                        "Duplicate instance path detected: '{}' ({}). Disambiguating to '{}_{}'",
-                        path, class_name, path, suffix
-                    );
-                    duplicate_count += 1;
-                    format!("{}_{}", path, suffix)
-                } else {
-                    path.to_string()
-                };
-
-                if !ref_id.is_empty() {
-                    ref_to_path.insert(ref_id.to_string(), disambiguated_path);
-                }
-            }
-        }
-    }
-
-    if duplicate_count > 0 {
-        tracing::info!("Found {} duplicate instance paths - these have been disambiguated", duplicate_count);
-    }
-
-    // Collect all disambiguated paths for container detection
-    let all_paths: std::collections::HashSet<String> = ref_to_path.values().cloned().collect();
-
-    // Helper to check if a path has children (is a container)
-    let has_children = |path: &str| -> bool {
-        let prefix = format!("{}/", path);
-        all_paths.iter().any(|p| p.starts_with(&prefix))
-    };
-
-    // Helper to normalize package paths (fix duplicated Packages folders)
-    let normalize_path = |path: &str| -> String {
-        // Fix case variations and duplications like "Packages/Packages" or "packages/Packages"
-        let mut normalized = path.to_string();
-
-        // Replace various case-insensitive duplications
-        let patterns = [
-            ("Packages/Packages/", "Packages/"),
-            ("packages/packages/", "packages/"),
-            ("Packages/packages/", "Packages/"),
-            ("packages/Packages/", "Packages/"),
-        ];
-
-        for (from, to) in patterns {
-            while normalized.contains(from) {
-                normalized = normalized.replace(from, to);
-            }
-        }
-
-        normalized
-    };
-
-    // PERFORMANCE OPTIMIZATION for large games (RBXSYNC-26):
-    // Instead of writing files sequentially (which causes PC hang on 180k+ instances),
-    // we batch directory creation and write files in parallel with bounded concurrency.
-
-    use futures::stream::{self, StreamExt};
-
-    // Maximum concurrent file writes to prevent overwhelming the filesystem
-    const MAX_CONCURRENT_WRITES: usize = 64;
-
-    // Struct to hold pending write operations
-    struct WriteOp {
-        path: PathBuf,
-        content: String,
-    }
-
-    // First pass: Collect all directories needed and prepare write operations
-    let mut directories_needed: HashSet<PathBuf> = HashSet::new();
-    let mut script_write_ops: Vec<WriteOp> = Vec::new();
-    let mut json_write_ops: Vec<WriteOp> = Vec::new();
-
-    tracing::info!("Preparing {} instances for parallel write...", all_instances.len());
-    let prep_start = std::time::Instant::now();
-
-    for inst in &all_instances {
-        let class_name = inst.get("className").and_then(|v| v.as_str()).unwrap_or("Unknown");
-
-        // Use disambiguated path from ref_to_path map to handle duplicate instance names
-        let ref_id = inst.get("referenceId").and_then(|v| v.as_str()).unwrap_or("");
-        let inst_path = if !ref_id.is_empty() {
-            ref_to_path.get(ref_id).map(|s| s.as_str()).unwrap_or("")
-        } else {
-            inst.get("path").and_then(|v| v.as_str()).unwrap_or("")
-        };
-        if inst_path.is_empty() {
-            continue;
-        }
-
-        // Normalize path to fix package folder duplication
-        let inst_path = normalize_path(inst_path);
-
-        // Apply tree mapping to convert DataModel path to filesystem path
-        let fs_path = apply_tree_mapping(&inst_path, &tree_mapping);
-
-        // Use mapped path for filesystem operations
-        let full_path = src_dir.join(&fs_path);
-
-        // Track service name (first segment of mapped path) for folder creation
-        if let Some(service_name) = fs_path.split('/').next() {
-            service_folders.insert(service_name.to_string());
-        }
-
-        // Collect parent directory instead of creating immediately
-        if let Some(parent) = full_path.parent() {
-            directories_needed.insert(parent.to_path_buf());
-        }
-
-        // Check if this instance has children (use normalized path)
-        let is_container = has_children(&inst_path);
-
-        // Check if this is a script with source
-        let is_script = matches!(class_name, "Script" | "LocalScript" | "ModuleScript");
-
-        if is_script {
-            // Prepare script source write operation
-            if let Some(props) = inst.get("properties") {
-                if let Some(source) = props.get("Source").and_then(|v| v.get("value")).and_then(|v| v.as_str()) {
-                    let extension = match class_name {
-                        "Script" => ".server.luau",
-                        "LocalScript" => ".client.luau",
-                        _ => ".luau",
-                    };
-                    let script_path = rbxsync_core::path_with_suffix(&full_path, extension);
-                    script_write_ops.push(WriteOp {
-                        path: PathBuf::from(script_path),
-                        content: source.to_string(),
-                    });
-                }
-            }
-        }
-
-        // Prepare .rbxjson file write operation
-        let json_path = if is_container {
-            // Container: folder will be created, put _meta.rbxjson inside
-            directories_needed.insert(full_path.clone());
-            full_path.join("_meta.rbxjson")
-        } else {
-            // Leaf: write as sibling .rbxjson
-            rbxsync_core::pathbuf_with_suffix(&full_path, ".rbxjson")
-        };
-
-        // Create a clean instance object without source (for scripts)
-        let mut clean_inst = inst.clone();
-        if is_script {
-            if let Some(props) = clean_inst.get_mut("properties") {
-                if let Some(obj) = props.as_object_mut() {
-                    obj.remove("Source");
-                }
-            }
-        }
-
-        if let Ok(json) = serde_json::to_string_pretty(&clean_inst) {
-            json_write_ops.push(WriteOp {
-                path: json_path,
-                content: json,
-            });
-        }
-    }
-
-    tracing::info!(
-        "Preparation complete in {:?}: {} directories, {} scripts, {} json files",
-        prep_start.elapsed(),
-        directories_needed.len(),
-        script_write_ops.len(),
-        json_write_ops.len()
-    );
-
-    // Batch create all directories (run in blocking task to not block async runtime)
-    let dirs_to_create: Vec<PathBuf> = directories_needed.into_iter().collect();
-    let dir_count = dirs_to_create.len();
-
-    let dir_start = std::time::Instant::now();
-    tokio::task::spawn_blocking(move || {
-        for dir in dirs_to_create {
-            let _ = std::fs::create_dir_all(&dir);
-        }
-    }).await.unwrap_or_else(|e| {
-        tracing::error!("Failed to create directories: {}", e);
-    });
-    tracing::info!("Created {} directories in {:?}", dir_count, dir_start.elapsed());
-
-    // Write files in parallel with bounded concurrency
-    let write_start = std::time::Instant::now();
-
-    // Write scripts in parallel
-    let script_count = script_write_ops.len();
-    let script_results: Vec<bool> = stream::iter(script_write_ops)
-        .map(|op| async move {
-            tokio::fs::write(&op.path, &op.content).await.is_ok()
-        })
-        .buffer_unordered(MAX_CONCURRENT_WRITES)
-        .collect()
-        .await;
-    let scripts_written = script_results.iter().filter(|&&ok| ok).count();
-
-    // Write JSON files in parallel
-    let json_count = json_write_ops.len();
-    let json_results: Vec<bool> = stream::iter(json_write_ops)
-        .map(|op| async move {
-            tokio::fs::write(&op.path, &op.content).await.is_ok()
-        })
-        .buffer_unordered(MAX_CONCURRENT_WRITES)
-        .collect()
-        .await;
-    let files_written = json_results.iter().filter(|&&ok| ok).count();
-
-    tracing::info!(
-        "Wrote {} scripts and {} json files in {:?} ({} concurrent writes)",
-        scripts_written, files_written, write_start.elapsed(), MAX_CONCURRENT_WRITES
-    );
-
-    // Log if there were any failures
-    let script_failures = script_count - scripts_written;
-    let json_failures = json_count - files_written;
-    if script_failures > 0 || json_failures > 0 {
-        tracing::warn!(
-            "Write failures: {} scripts, {} json files",
-            script_failures, json_failures
+        tracing::info!(
+            "Package preservation enabled - Packages folder: {}",
+            packages_folder
         );
     }
 
-    // Clean up chunk files
-    if let Ok(entries) = std::fs::read_dir(&src_dir) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                if name.starts_with("chunk_") && name.ends_with(".json") {
-                    let _ = std::fs::remove_file(path);
-                }
+    let generate_tooling_files = config
+        .as_ref()
+        .and_then(|c| c.get("config"))
+        .and_then(|c| c.get("generateToolingFiles"))
+        .and_then(|v| v.as_bool())
+        .unwrap_or(true);
+
+    let project_name = config
+        .as_ref()
+        .and_then(|c| c.get("name"))
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+
+    // Read chunk data from disk BEFORE backup/rename (chunks are stored in output_dir)
+    let all_instances = read_chunks_from_disk(&output_dir, chunks_received);
+
+    let writer_options = rbxsync_core::ExtractWriterOptions {
+        project_dir: PathBuf::from(&req.project_dir),
+        tree_mapping,
+        preserve_packages,
+        packages_folder,
+        generate_tooling_files,
+        project_name,
+    };
+
+    let writer_summary =
+        match rbxsync_core::write_serialized_instances(all_instances, writer_options).await {
+            Ok(summary) => summary,
+            Err(e) => {
+                tracing::error!("Extraction finalization failed: {}", e);
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({
+                        "success": false,
+                        "error": format!("Extraction finalization failed: {}", e)
+                    })),
+                );
             }
-        }
-    }
-
-    // Create service folders even if they're empty
-    for service in &service_folders {
-        let service_folder = src_dir.join(service);
-        // Create the folder if it doesn't exist
-        let _ = std::fs::create_dir_all(&service_folder);
-    }
-
-    // Restore Packages folder from backup if preservation is enabled
-    let mut packages_preserved = false;
-    if preserve_packages {
-        // Look for Packages folders in common locations within backup
-        let package_restore_locations: Vec<(String, String)> = vec![
-            ("ReplicatedStorage/Packages".to_string(), "ReplicatedStorage/Packages".to_string()),
-            ("ServerScriptService/Packages".to_string(), "ServerScriptService/Packages".to_string()),
-            ("ServerStorage/Packages".to_string(), "ServerStorage/Packages".to_string()),
-            // Also check root-level Packages folder
-            (packages_folder.clone(), packages_folder.clone()),
-        ];
-
-        for (backup_rel, dest_rel) in &package_restore_locations {
-            let backup_packages = backup_src.join(backup_rel);
-            let dest_packages = src_dir.join(dest_rel);
-
-            if backup_packages.exists() && backup_packages.is_dir() {
-                // Remove any extracted packages (from Studio) to replace with local
-                if dest_packages.exists() {
-                    let _ = std::fs::remove_dir_all(&dest_packages);
-                }
-
-                // Ensure parent directory exists
-                if let Some(parent) = dest_packages.parent() {
-                    let _ = std::fs::create_dir_all(parent);
-                }
-
-                // Restore packages from backup
-                if let Err(e) = copy_dir_recursive(&backup_packages, &dest_packages) {
-                    tracing::warn!("Failed to restore packages from {}: {}", backup_rel, e);
-                } else {
-                    tracing::info!("Restored Wally packages from backup: {}", backup_rel);
-                    packages_preserved = true;
-                }
-            }
-        }
-    }
-
-    tracing::info!(
-        "Finalize complete: {} .rbxjson files, {} .luau scripts, {} services{}",
-        files_written,
-        scripts_written,
-        service_folders.len(),
-        if packages_preserved { ", packages preserved" } else { "" }
-    );
-
-    // Generate tooling config files (RBXSYNC-83)
-    generate_tooling_files(&req.project_dir, &service_folders, &config);
+        };
 
     // Clear any file change events that accumulated during extraction (from the files we just wrote)
     // This prevents them from being synced back to Studio after extraction
@@ -2321,19 +1909,22 @@ async fn handle_extract_finalize(
                 drained += 1;
             }
             if drained > 0 {
-                tracing::info!("Drained {} file change events generated during extraction", drained);
+                tracing::info!(
+                    "Drained {} file change events generated during extraction",
+                    drained
+                );
             }
         }
 
         // Resume live sync after cleanup
-        state_for_cleanup.live_sync_paused.store(false, std::sync::atomic::Ordering::Relaxed);
+        state_for_cleanup
+            .live_sync_paused
+            .store(false, std::sync::atomic::Ordering::Relaxed);
         tracing::info!("Live sync resumed after extraction");
     });
 
     // Mark session as finalized so status endpoint returns complete=true
     // This is important when there are 0 chunks (excluded services case)
-    // Drop the read lock so we can take a write lock
-    drop(session_guard);
     {
         let mut session_write = state.extraction_session.write().await;
         if let Some(ref mut s) = *session_write {
@@ -2352,9 +1943,9 @@ async fn handle_extract_finalize(
         StatusCode::OK,
         Json(serde_json::json!({
             "success": true,
-            "filesWritten": files_written,
-            "scriptsWritten": scripts_written,
-            "totalInstances": all_instances.len()
+            "filesWritten": writer_summary.files_written,
+            "scriptsWritten": writer_summary.scripts_written,
+            "totalInstances": writer_summary.total_instances
         })),
     )
 }
@@ -2372,7 +1963,10 @@ pub struct TerrainRequest {
 /// Handle terrain data from extraction (supports batched uploads)
 async fn handle_extract_terrain(Json(req): Json<TerrainRequest>) -> impl IntoResponse {
     tracing::info!("Received terrain data for project: {}", req.project_dir);
-    let terrain_dir = PathBuf::from(&req.project_dir).join("src").join("Workspace").join("Terrain");
+    let terrain_dir = PathBuf::from(&req.project_dir)
+        .join("src")
+        .join("Workspace")
+        .join("Terrain");
     tracing::info!("Terrain directory: {}", terrain_dir.display());
 
     // Create terrain directory
@@ -2403,7 +1997,9 @@ async fn handle_extract_terrain(Json(req): Json<TerrainRequest>) -> impl IntoRes
         if let Some(mut existing_terrain) = existing {
             // Append new chunks to existing
             if let (Some(existing_chunks), Some(new_chunks)) = (
-                existing_terrain.get_mut("chunks").and_then(|c| c.as_array_mut()),
+                existing_terrain
+                    .get_mut("chunks")
+                    .and_then(|c| c.as_array_mut()),
                 req.terrain.get("chunks").and_then(|c| c.as_array()),
             ) {
                 for chunk in new_chunks {
@@ -2440,14 +2036,24 @@ async fn handle_extract_terrain(Json(req): Json<TerrainRequest>) -> impl IntoRes
         );
     }
 
-    let chunk_count = final_terrain.get("chunks")
+    let chunk_count = final_terrain
+        .get("chunks")
         .and_then(|c| c.as_array())
         .map(|a| a.len())
         .unwrap_or(0);
 
-    tracing::info!("Terrain batch {}/{} saved: {} total chunks", batch_index, total_batches, chunk_count);
+    tracing::info!(
+        "Terrain batch {}/{} saved: {} total chunks",
+        batch_index,
+        total_batches,
+        chunk_count
+    );
 
-    tracing::info!("Terrain saved: {} chunks to {}", chunk_count, terrain_file.display());
+    tracing::info!(
+        "Terrain saved: {} chunks to {}",
+        chunk_count,
+        terrain_file.display()
+    );
 
     (
         StatusCode::OK,
@@ -2507,8 +2113,15 @@ async fn handle_sync_command(
 
     match result {
         Ok(Some(response)) => {
-            tracing::info!("Received response for {}: success={}", request_id, response.success);
-            (StatusCode::OK, Json(serde_json::to_value(&response).unwrap()))
+            tracing::info!(
+                "Received response for {}: success={}",
+                request_id,
+                response.success
+            );
+            (
+                StatusCode::OK,
+                Json(serde_json::to_value(&response).unwrap()),
+            )
         }
         Ok(None) => {
             tracing::warn!("Channel closed for {}", request_id);
@@ -2550,15 +2163,18 @@ async fn handle_sync_batch(
     if let Some(ref project_dir) = req.project_dir {
         if !project_dir.is_empty() {
             let mut ops = state.operation_state.write().await;
-            ops.insert(project_dir.clone(), OperationInfo {
-                op_type: OperationType::Sync,
-                project_dir: project_dir.clone(),
-                start_time: std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map(|d| d.as_millis() as u64)
-                    .unwrap_or(0),
-                progress: Some(format!("Syncing {} operations...", req.operations.len())),
-            });
+            ops.insert(
+                project_dir.clone(),
+                OperationInfo {
+                    op_type: OperationType::Sync,
+                    project_dir: project_dir.clone(),
+                    start_time: std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_millis() as u64)
+                        .unwrap_or(0),
+                    progress: Some(format!("Syncing {} operations...", req.operations.len())),
+                },
+            );
         }
     }
 
@@ -2583,10 +2199,15 @@ async fn handle_sync_batch(
         plugin_request,
         req.session_id.as_deref(),
         req.project_dir.as_deref(),
-    ).await;
+    )
+    .await;
     let _ = state.trigger.send(());
 
-    tracing::info!("Sent sync batch with {} operations ({})", req.operations.len(), request_id);
+    tracing::info!(
+        "Sent sync batch with {} operations ({})",
+        req.operations.len(),
+        request_id
+    );
 
     // Wait for response with longer timeout for batch operations
     let timeout = tokio::time::Duration::from_secs(300); // 5 minutes for large batches
@@ -2606,21 +2227,24 @@ async fn handle_sync_batch(
 
     match result {
         Ok(Some(response)) => {
-            tracing::info!("Batch complete for {}: success={}", request_id, response.success);
-            (StatusCode::OK, Json(serde_json::to_value(&response).unwrap()))
-        }
-        Ok(None) => {
+            tracing::info!(
+                "Batch complete for {}: success={}",
+                request_id,
+                response.success
+            );
             (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": "Channel closed"})),
+                StatusCode::OK,
+                Json(serde_json::to_value(&response).unwrap()),
             )
         }
-        Err(_) => {
-            (
-                StatusCode::GATEWAY_TIMEOUT,
-                Json(serde_json::json!({"error": "Timeout waiting for plugin response"})),
-            )
-        }
+        Ok(None) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": "Channel closed"})),
+        ),
+        Err(_) => (
+            StatusCode::GATEWAY_TIMEOUT,
+            Json(serde_json::json!({"error": "Timeout waiting for plugin response"})),
+        ),
     }
 }
 
@@ -2635,7 +2259,7 @@ pub struct SyncFromStudioRequest {
 #[derive(Debug, Deserialize)]
 pub struct StudioChangeOperation {
     #[serde(rename = "type")]
-    pub change_type: String,  // "create", "modify", "delete", "rename"
+    pub change_type: String, // "create", "modify", "delete", "rename"
     pub path: String,
     #[serde(rename = "className")]
     pub class_name: Option<String>,
@@ -2644,10 +2268,19 @@ pub struct StudioChangeOperation {
 
 /// Handle changes from Studio and write them to files
 async fn handle_sync_from_studio(Json(req): Json<SyncFromStudioRequest>) -> impl IntoResponse {
-    tracing::info!("handle_sync_from_studio called with {} operations", req.operations.len());
+    tracing::info!(
+        "handle_sync_from_studio called with {} operations",
+        req.operations.len()
+    );
     for (i, op) in req.operations.iter().enumerate() {
-        tracing::info!("  Op {}: type={}, path={}, className={:?}, has_data={}",
-            i, op.change_type, op.path, op.class_name, op.data.is_some());
+        tracing::info!(
+            "  Op {}: type={}, path={}, className={:?}, has_data={}",
+            i,
+            op.change_type,
+            op.path,
+            op.class_name,
+            op.data.is_some()
+        );
     }
     let src_dir = PathBuf::from(&req.project_dir).join("src");
 
@@ -2693,11 +2326,10 @@ async fn handle_sync_from_studio(Json(req): Json<SyncFromStudioRequest>) -> impl
                 }
 
                 // Try to delete as a directory (for Folder instances)
-                if full_path.is_dir()
-                    && std::fs::remove_dir_all(&full_path).is_ok() {
-                        deleted_any = true;
-                        tracing::info!("Studio sync: deleted folder {:?}", full_path);
-                    }
+                if full_path.is_dir() && std::fs::remove_dir_all(&full_path).is_ok() {
+                    deleted_any = true;
+                    tracing::info!("Studio sync: deleted folder {:?}", full_path);
+                }
 
                 if deleted_any {
                     files_written += 1;
@@ -2715,7 +2347,11 @@ async fn handle_sync_from_studio(Json(req): Json<SyncFromStudioRequest>) -> impl
                         let old_full_path = src_dir.join(&old_fs_path);
                         let new_full_path = src_dir.join(&new_fs_path);
 
-                        tracing::info!("Studio sync: renaming {:?} -> {:?}", old_full_path, new_full_path);
+                        tracing::info!(
+                            "Studio sync: renaming {:?} -> {:?}",
+                            old_full_path,
+                            new_full_path
+                        );
 
                         // Ensure new parent directory exists
                         if let Some(parent) = new_full_path.parent() {
@@ -2726,11 +2362,18 @@ async fn handle_sync_from_studio(Json(req): Json<SyncFromStudioRequest>) -> impl
                         if old_full_path.is_dir() {
                             match std::fs::rename(&old_full_path, &new_full_path) {
                                 Ok(_) => {
-                                    tracing::info!("Studio sync: renamed folder {:?} -> {:?}", old_full_path, new_full_path);
+                                    tracing::info!(
+                                        "Studio sync: renamed folder {:?} -> {:?}",
+                                        old_full_path,
+                                        new_full_path
+                                    );
                                     files_written += 1;
                                 }
                                 Err(e) => {
-                                    errors.push(format!("Failed to rename folder {:?}: {}", old_full_path, e));
+                                    errors.push(format!(
+                                        "Failed to rename folder {:?}: {}",
+                                        old_full_path, e
+                                    ));
                                 }
                             }
                         } else {
@@ -2738,18 +2381,27 @@ async fn handle_sync_from_studio(Json(req): Json<SyncFromStudioRequest>) -> impl
                             let extensions = [".server.luau", ".client.luau", ".luau", ".rbxjson"];
                             let mut renamed_any = false;
                             for ext in extensions {
-                                let old_file_str = rbxsync_core::path_with_suffix(&old_full_path, ext);
-                                let new_file_str = rbxsync_core::path_with_suffix(&new_full_path, ext);
+                                let old_file_str =
+                                    rbxsync_core::path_with_suffix(&old_full_path, ext);
+                                let new_file_str =
+                                    rbxsync_core::path_with_suffix(&new_full_path, ext);
                                 let old_file = PathBuf::from(&old_file_str);
                                 let new_file = PathBuf::from(&new_file_str);
                                 if old_file.exists() {
                                     match std::fs::rename(&old_file, &new_file) {
                                         Ok(_) => {
-                                            tracing::info!("Studio sync: renamed {:?} -> {:?}", old_file, new_file);
+                                            tracing::info!(
+                                                "Studio sync: renamed {:?} -> {:?}",
+                                                old_file,
+                                                new_file
+                                            );
                                             renamed_any = true;
                                         }
                                         Err(e) => {
-                                            errors.push(format!("Failed to rename {:?}: {}", old_file, e));
+                                            errors.push(format!(
+                                                "Failed to rename {:?}: {}",
+                                                old_file, e
+                                            ));
                                         }
                                     }
                                 }
@@ -2771,25 +2423,31 @@ async fn handle_sync_from_studio(Json(req): Json<SyncFromStudioRequest>) -> impl
                     }
 
                     // Check if this is a script with source
-                    let class_name = op.class_name.as_deref()
+                    let class_name = op
+                        .class_name
+                        .as_deref()
                         .or_else(|| data.get("className").and_then(|v| v.as_str()))
                         .unwrap_or("");
 
                     let is_script = matches!(class_name, "Script" | "LocalScript" | "ModuleScript");
-                    tracing::info!("Processing {} - class_name: '{}', is_script: {}, data: {:?}", inst_path, class_name, is_script, data);
+                    tracing::info!(
+                        "Processing {} - class_name: '{}', is_script: {}, data: {:?}",
+                        inst_path,
+                        class_name,
+                        is_script,
+                        data
+                    );
 
                     if is_script {
                         // Extract script source - try multiple formats
                         // Format 1: data.source (from ChangeTracker)
                         // Format 2: data.properties.Source.value (from full extraction)
-                        let source = data.get("source")
-                            .and_then(|v| v.as_str())
-                            .or_else(|| {
-                                data.get("properties")
-                                    .and_then(|p| p.get("Source"))
-                                    .and_then(|s| s.get("value"))
-                                    .and_then(|v| v.as_str())
-                            });
+                        let source = data.get("source").and_then(|v| v.as_str()).or_else(|| {
+                            data.get("properties")
+                                .and_then(|p| p.get("Source"))
+                                .and_then(|s| s.get("value"))
+                                .and_then(|v| v.as_str())
+                        });
 
                         tracing::debug!("Source extraction result: {:?}", source.map(|s| s.len()));
                         if let Some(source) = source {
@@ -2845,7 +2503,11 @@ async fn handle_sync_from_studio(Json(req): Json<SyncFromStudioRequest>) -> impl
         }
     }
 
-    tracing::info!("Studio sync complete: {} files written, {} errors", files_written, errors.len());
+    tracing::info!(
+        "Studio sync complete: {} files written, {} errors",
+        files_written,
+        errors.len()
+    );
 
     (
         StatusCode::OK,
@@ -2925,24 +2587,32 @@ async fn handle_sync_read_tree(Json(req): Json<ReadTreeRequest>) -> impl IntoRes
                 } else if let Some(ext) = path.extension() {
                     if ext == "rbxjson" {
                         // Skip terrain.rbxjson - it has different format (terrain chunk data, not instance data)
-                        let filename = path.file_name().map(|n| n.to_string_lossy()).unwrap_or_default();
+                        let filename = path
+                            .file_name()
+                            .map(|n| n.to_string_lossy())
+                            .unwrap_or_default();
                         if filename == "terrain.rbxjson" {
                             tracing::debug!("Skipping terrain file: {:?}", path);
                             continue;
                         }
                         // Read instance JSON
                         if let Ok(content) = std::fs::read_to_string(&path) {
-                            if let Ok(mut inst) = serde_json::from_str::<serde_json::Value>(&content) {
+                            if let Ok(mut inst) =
+                                serde_json::from_str::<serde_json::Value>(&content)
+                            {
                                 // Derive path from file system if not present in JSON
                                 let rel_path = path.strip_prefix(base).unwrap_or(&path);
                                 let path_str = rbxsync_core::path_to_string(rel_path);
                                 // Convert file path to instance path:
                                 // e.g., "Workspace/MyPart.rbxjson" -> "Workspace/MyPart"
                                 // e.g., "Workspace/MyPart/_meta.rbxjson" -> "Workspace/MyPart"
-                                let is_meta = path_str.ends_with("/_meta.rbxjson") || path_str.ends_with("\\_meta.rbxjson");
+                                let is_meta = path_str.ends_with("/_meta.rbxjson")
+                                    || path_str.ends_with("\\_meta.rbxjson");
                                 let rel_inst_path = if is_meta {
                                     // _meta.rbxjson represents the parent folder
-                                    path_str.replace("/_meta.rbxjson", "").replace("\\_meta.rbxjson", "")
+                                    path_str
+                                        .replace("/_meta.rbxjson", "")
+                                        .replace("\\_meta.rbxjson", "")
                                 } else {
                                     path_str.replace(".rbxjson", "")
                                 };
@@ -2955,21 +2625,34 @@ async fn handle_sync_read_tree(Json(req): Json<ReadTreeRequest>) -> impl IntoRes
                                 };
 
                                 if path_str.contains("_meta") {
-                                    tracing::info!("DEBUG: path_str='{}', is_meta={}, inst_path='{}'", path_str, is_meta, inst_path);
+                                    tracing::info!(
+                                        "DEBUG: path_str='{}', is_meta={}, inst_path='{}'",
+                                        path_str,
+                                        is_meta,
+                                        inst_path
+                                    );
                                 }
 
                                 // Set path from file location (used for tracking, not naming)
                                 // Normalize path to strip disambiguation suffixes (RBXSYNC-68)
                                 // e.g., "Workspace/Part_a1b2c3d4" -> "Workspace/Part"
-                                let normalized_inst_path = normalize_path_for_comparison(&inst_path);
+                                let normalized_inst_path =
+                                    normalize_path_for_comparison(&inst_path);
                                 if let Some(obj) = inst.as_object_mut() {
                                     // Always set path from file location (normalized)
-                                    obj.insert("path".to_string(), serde_json::Value::String(normalized_inst_path.clone()));
+                                    obj.insert(
+                                        "path".to_string(),
+                                        serde_json::Value::String(normalized_inst_path.clone()),
+                                    );
 
                                     // Only set name if not provided in JSON
                                     if !obj.contains_key("name") {
-                                        if let Some(name) = normalized_inst_path.rsplit('/').next() {
-                                            obj.insert("name".to_string(), serde_json::Value::String(name.to_string()));
+                                        if let Some(name) = normalized_inst_path.rsplit('/').next()
+                                        {
+                                            obj.insert(
+                                                "name".to_string(),
+                                                serde_json::Value::String(name.to_string()),
+                                            );
                                         }
                                     }
                                 }
@@ -3011,14 +2694,33 @@ async fn handle_sync_read_tree(Json(req): Json<ReadTreeRequest>) -> impl IntoRes
 
     // Walk packages directory if enabled (packages_dir already validated when packages_enabled was set)
     if packages_enabled {
-        tracing::info!("Reading Wally packages from {} -> {}", packages_folder, shared_packages_path);
-        walk_dir(&packages_dir, &packages_dir, shared_packages_path, &mut instances, &mut scripts);
+        tracing::info!(
+            "Reading Wally packages from {} -> {}",
+            packages_folder,
+            shared_packages_path
+        );
+        walk_dir(
+            &packages_dir,
+            &packages_dir,
+            shared_packages_path,
+            &mut instances,
+            &mut scripts,
+        );
 
         // Also check for server packages subdirectory
         let server_pkg_dir = packages_dir.join("ServerPackages");
         if server_pkg_dir.exists() && server_pkg_dir.is_dir() {
-            tracing::info!("Reading server packages from ServerPackages -> {}", server_packages_path);
-            walk_dir(&server_pkg_dir, &server_pkg_dir, server_packages_path, &mut instances, &mut scripts);
+            tracing::info!(
+                "Reading server packages from ServerPackages -> {}",
+                server_packages_path
+            );
+            walk_dir(
+                &server_pkg_dir,
+                &server_pkg_dir,
+                server_packages_path,
+                &mut instances,
+                &mut scripts,
+            );
         }
     }
 
@@ -3029,17 +2731,24 @@ async fn handle_sync_read_tree(Json(req): Json<ReadTreeRequest>) -> impl IntoRes
                 // Add or update Source property
                 if let Some(props) = inst.get_mut("properties") {
                     if let Some(obj) = props.as_object_mut() {
-                        obj.insert("Source".to_string(), serde_json::json!({
-                            "type": "string",
-                            "value": source
-                        }));
+                        obj.insert(
+                            "Source".to_string(),
+                            serde_json::json!({
+                                "type": "string",
+                                "value": source
+                            }),
+                        );
                     }
                 }
             }
         }
     }
 
-    tracing::info!("Read {} instances from {}", instances.len(), src_dir.display());
+    tracing::info!(
+        "Read {} instances from {}",
+        instances.len(),
+        src_dir.display()
+    );
 
     (
         StatusCode::OK,
@@ -3081,25 +2790,23 @@ async fn handle_sync_read_terrain(Json(req): Json<ReadTreeRequest>) -> impl Into
     }
 
     match std::fs::read_to_string(&terrain_file) {
-        Ok(content) => {
-            match serde_json::from_str::<serde_json::Value>(&content) {
-                Ok(terrain_data) => (
-                    StatusCode::OK,
-                    Json(serde_json::json!({
-                        "success": true,
-                        "hasTerrain": true,
-                        "terrain": terrain_data
-                    })),
-                ),
-                Err(e) => (
-                    StatusCode::OK,
-                    Json(serde_json::json!({
-                        "success": false,
-                        "error": format!("Failed to parse terrain data: {}", e)
-                    })),
-                ),
-            }
-        }
+        Ok(content) => match serde_json::from_str::<serde_json::Value>(&content) {
+            Ok(terrain_data) => (
+                StatusCode::OK,
+                Json(serde_json::json!({
+                    "success": true,
+                    "hasTerrain": true,
+                    "terrain": terrain_data
+                })),
+            ),
+            Err(e) => (
+                StatusCode::OK,
+                Json(serde_json::json!({
+                    "success": false,
+                    "error": format!("Failed to parse terrain data: {}", e)
+                })),
+            ),
+        },
         Err(e) => (
             StatusCode::OK,
             Json(serde_json::json!({
@@ -3126,7 +2833,9 @@ async fn handle_sync_pending_changes(
 
     // Filter pending changes by project directory
     let src_prefix = PathBuf::from(&req.project_dir).join("src");
-    let count = file_watcher.pending_changes.iter()
+    let count = file_watcher
+        .pending_changes
+        .iter()
         .filter(|(path, _)| path.starts_with(&src_prefix))
         .count();
 
@@ -3212,7 +2921,15 @@ async fn handle_sync_incremental(
                     }
                 }
                 if path.is_dir() {
-                    walk_dir_incremental(&path, base, instances, scripts, last_sync, files_checked, files_modified);
+                    walk_dir_incremental(
+                        &path,
+                        base,
+                        instances,
+                        scripts,
+                        last_sync,
+                        files_checked,
+                        files_modified,
+                    );
                 } else if let Some(ext) = path.extension() {
                     *files_checked += 1;
 
@@ -3238,27 +2955,41 @@ async fn handle_sync_incremental(
                     *files_modified += 1;
 
                     if ext == "rbxjson" {
-                        let filename = path.file_name().map(|n| n.to_string_lossy()).unwrap_or_default();
+                        let filename = path
+                            .file_name()
+                            .map(|n| n.to_string_lossy())
+                            .unwrap_or_default();
                         if filename == "terrain.rbxjson" {
                             continue;
                         }
 
                         if let Ok(content) = std::fs::read_to_string(&path) {
-                            if let Ok(mut inst) = serde_json::from_str::<serde_json::Value>(&content) {
+                            if let Ok(mut inst) =
+                                serde_json::from_str::<serde_json::Value>(&content)
+                            {
                                 let rel_path = path.strip_prefix(base).unwrap_or(&path);
                                 let path_str = rbxsync_core::path_to_string(rel_path);
-                                let is_meta = path_str.ends_with("/_meta.rbxjson") || path_str.ends_with("\\_meta.rbxjson");
+                                let is_meta = path_str.ends_with("/_meta.rbxjson")
+                                    || path_str.ends_with("\\_meta.rbxjson");
                                 let inst_path = if is_meta {
-                                    path_str.replace("/_meta.rbxjson", "").replace("\\_meta.rbxjson", "")
+                                    path_str
+                                        .replace("/_meta.rbxjson", "")
+                                        .replace("\\_meta.rbxjson", "")
                                 } else {
                                     path_str.replace(".rbxjson", "")
                                 };
 
                                 if let Some(obj) = inst.as_object_mut() {
-                                    obj.insert("path".to_string(), serde_json::Value::String(inst_path.clone()));
+                                    obj.insert(
+                                        "path".to_string(),
+                                        serde_json::Value::String(inst_path.clone()),
+                                    );
                                     if !obj.contains_key("name") {
                                         if let Some(name) = inst_path.rsplit('/').next() {
-                                            obj.insert("name".to_string(), serde_json::Value::String(name.to_string()));
+                                            obj.insert(
+                                                "name".to_string(),
+                                                serde_json::Value::String(name.to_string()),
+                                            );
                                         }
                                     }
                                 }
@@ -3282,7 +3013,15 @@ async fn handle_sync_incremental(
         }
     }
 
-    walk_dir_incremental(&src_dir, &src_dir, &mut instances, &mut scripts, last_sync, &mut files_checked, &mut files_modified);
+    walk_dir_incremental(
+        &src_dir,
+        &src_dir,
+        &mut instances,
+        &mut scripts,
+        last_sync,
+        &mut files_checked,
+        &mut files_modified,
+    );
 
     // Merge script sources into their instance data
     for inst in &mut instances {
@@ -3290,10 +3029,13 @@ async fn handle_sync_incremental(
             if let Some(source) = scripts.get(path) {
                 if let Some(props) = inst.get_mut("properties") {
                     if let Some(obj) = props.as_object_mut() {
-                        obj.insert("Source".to_string(), serde_json::json!({
-                            "type": "string",
-                            "value": source
-                        }));
+                        obj.insert(
+                            "Source".to_string(),
+                            serde_json::json!({
+                                "type": "string",
+                                "value": source
+                            }),
+                        );
                     }
                 }
             }
@@ -3301,14 +3043,16 @@ async fn handle_sync_incremental(
     }
 
     // Handle scripts that don't have an .rbxjson (standalone scripts)
-    let instance_paths: std::collections::HashSet<String> = instances.iter()
+    let instance_paths: std::collections::HashSet<String> = instances
+        .iter()
         .filter_map(|inst| inst.get("path").and_then(|v| v.as_str()).map(String::from))
         .collect();
 
     for (script_path, source) in &scripts {
         if !instance_paths.contains(script_path) {
             // Determine script type from path
-            let class_name = if script_path.ends_with(".server") || script_path.contains(".server/") {
+            let class_name = if script_path.ends_with(".server") || script_path.contains(".server/")
+            {
                 "Script"
             } else if script_path.ends_with(".client") || script_path.contains(".client/") {
                 "LocalScript"
@@ -3336,7 +3080,9 @@ async fn handle_sync_incremental(
 
     tracing::info!(
         "Incremental sync: checked {} files, {} modified (full_sync: {})",
-        files_checked, files_modified, full_sync
+        files_checked,
+        files_modified,
+        full_sync
     );
 
     (
@@ -3435,7 +3181,9 @@ async fn handle_studio_paths(
             tracing::warn!("Timeout waiting for Studio paths: {}", request_id);
             (
                 StatusCode::GATEWAY_TIMEOUT,
-                Json(serde_json::json!({"success": false, "error": "Timeout waiting for plugin response"})),
+                Json(
+                    serde_json::json!({"success": false, "error": "Timeout waiting for plugin response"}),
+                ),
             )
         }
     }
@@ -3458,9 +3206,9 @@ pub struct DiffEntry {
 /// Diff result
 #[derive(Debug, Serialize)]
 pub struct DiffResult {
-    pub added: Vec<DiffEntry>,      // In files, not in Studio (would be created)
-    pub removed: Vec<DiffEntry>,    // In Studio, not in files (would be deleted)
-    pub common: usize,              // In both
+    pub added: Vec<DiffEntry>,   // In files, not in Studio (would be created)
+    pub removed: Vec<DiffEntry>, // In Studio, not in files (would be deleted)
+    pub common: usize,           // In both
 }
 
 /// Handle diff request - compares files with Studio
@@ -3501,9 +3249,12 @@ async fn handle_diff(
                             if let Ok(inst) = serde_json::from_str::<serde_json::Value>(&content) {
                                 let rel_path = path.strip_prefix(base).unwrap_or(&path);
                                 let path_str = rbxsync_core::path_to_string(rel_path);
-                                let is_meta = path_str.ends_with("/_meta.rbxjson") || path_str.ends_with("\\_meta.rbxjson");
+                                let is_meta = path_str.ends_with("/_meta.rbxjson")
+                                    || path_str.ends_with("\\_meta.rbxjson");
                                 let inst_path = if is_meta {
-                                    path_str.replace("/_meta.rbxjson", "").replace("\\_meta.rbxjson", "")
+                                    path_str
+                                        .replace("/_meta.rbxjson", "")
+                                        .replace("\\_meta.rbxjson", "")
                                 } else {
                                     path_str.replace(".rbxjson", "")
                                 };
@@ -3513,7 +3264,8 @@ async fn handle_diff(
                                 // (RBXSYNC-68: extract adds _refId suffixes, Studio paths don't have them)
                                 let normalized_path = normalize_path_for_comparison(&inst_path);
                                 paths.insert(normalized_path.clone());
-                                if let Some(class) = inst.get("className").and_then(|v| v.as_str()) {
+                                if let Some(class) = inst.get("className").and_then(|v| v.as_str())
+                                {
                                     classes.insert(normalized_path, class.to_string());
                                 }
                             }
@@ -3525,7 +3277,11 @@ async fn handle_diff(
     }
 
     collect_file_paths(&src_dir, &src_dir, &mut file_paths, &mut file_classes);
-    tracing::info!("Read {} file paths from {}", file_paths.len(), src_dir.display());
+    tracing::info!(
+        "Read {} file paths from {}",
+        file_paths.len(),
+        src_dir.display()
+    );
 
     // 2. Get Studio paths via plugin
     let request_id = Uuid::new_v4();
@@ -3575,7 +3331,9 @@ async fn handle_diff(
         Err(_) => {
             return (
                 StatusCode::GATEWAY_TIMEOUT,
-                Json(serde_json::json!({"success": false, "error": "Timeout waiting for Studio paths"})),
+                Json(
+                    serde_json::json!({"success": false, "error": "Timeout waiting for Studio paths"}),
+                ),
             );
         }
     };
@@ -3784,7 +3542,9 @@ pub struct TestStatusResponse {
 /// Returns true if state was cleared
 async fn clear_stale_playtest_state(state: &Arc<AppState>) -> bool {
     let heartbeat = state.last_bot_heartbeat.read().await;
-    let is_active = state.playtest_active.load(std::sync::atomic::Ordering::Relaxed);
+    let is_active = state
+        .playtest_active
+        .load(std::sync::atomic::Ordering::Relaxed);
 
     // Consider stale if no heartbeat in 5 seconds
     let stale = if let Some(last) = *heartbeat {
@@ -3797,7 +3557,9 @@ async fn clear_stale_playtest_state(state: &Arc<AppState>) -> bool {
 
     if stale && is_active {
         tracing::info!("Clearing stale playtest state (heartbeat timeout)");
-        state.playtest_active.store(false, std::sync::atomic::Ordering::Relaxed);
+        state
+            .playtest_active
+            .store(false, std::sync::atomic::Ordering::Relaxed);
         *state.playtest_ended.write().await = Some(std::time::Instant::now());
         *state.playtest_ended_reason.write().await = Some("plugin_unresponsive".to_string());
         *state.bot_state.write().await = None;
@@ -3974,7 +3736,9 @@ async fn handle_test_playtest_status(State(state): State<Arc<AppState>>) -> impl
     // Auto-clear stale state first
     let cleared = clear_stale_playtest_state(&state).await;
 
-    let is_active = state.playtest_active.load(std::sync::atomic::Ordering::Relaxed);
+    let is_active = state
+        .playtest_active
+        .load(std::sync::atomic::Ordering::Relaxed);
     let heartbeat = state.last_bot_heartbeat.read().await;
     let started = state.playtest_started.read().await;
     let ended = state.playtest_ended.read().await;
@@ -4049,7 +3813,9 @@ async fn handle_playtest_start(
         Ok(Some(response)) => {
             state.response_channels.write().await.remove(&request_id);
             if response.success {
-                state.playtest_active.store(true, std::sync::atomic::Ordering::Relaxed);
+                state
+                    .playtest_active
+                    .store(true, std::sync::atomic::Ordering::Relaxed);
                 *state.playtest_started.write().await = Some(std::time::Instant::now());
                 *state.playtest_ended.write().await = None;
                 *state.playtest_ended_reason.write().await = None;
@@ -4104,14 +3870,19 @@ async fn handle_playtest_stop(State(state): State<Arc<AppState>>) -> impl IntoRe
     match tokio::time::timeout(timeout, rx.recv()).await {
         Ok(Some(response)) => {
             state.response_channels.write().await.remove(&request_id);
-            state.playtest_active.store(false, std::sync::atomic::Ordering::Relaxed);
+            state
+                .playtest_active
+                .store(false, std::sync::atomic::Ordering::Relaxed);
             *state.playtest_ended.write().await = Some(std::time::Instant::now());
             *state.playtest_ended_reason.write().await = Some("stopped".to_string());
-            (StatusCode::OK, Json(serde_json::json!({
-                "success": response.success,
-                "data": response.data,
-                "error": response.error
-            })))
+            (
+                StatusCode::OK,
+                Json(serde_json::json!({
+                    "success": response.success,
+                    "data": response.data,
+                    "error": response.error
+                })),
+            )
         }
         Ok(None) => {
             state.response_channels.write().await.remove(&request_id);
@@ -4157,14 +3928,21 @@ async fn handle_playtest_status(State(state): State<Arc<AppState>>) -> impl Into
         Ok(Some(response)) => {
             state.response_channels.write().await.remove(&request_id);
             // Update server-side playtest state based on plugin response
-            let running = response.data.get("running")
+            let running = response
+                .data
+                .get("running")
                 .and_then(|v| v.as_bool())
                 .unwrap_or(false);
-            state.playtest_active.store(running, std::sync::atomic::Ordering::Relaxed);
-            (StatusCode::OK, Json(serde_json::json!({
-                "success": true,
-                "data": response.data
-            })))
+            state
+                .playtest_active
+                .store(running, std::sync::atomic::Ordering::Relaxed);
+            (
+                StatusCode::OK,
+                Json(serde_json::json!({
+                    "success": true,
+                    "data": response.data
+                })),
+            )
         }
         Ok(None) => {
             state.response_channels.write().await.remove(&request_id);
@@ -4179,7 +3957,9 @@ async fn handle_playtest_status(State(state): State<Arc<AppState>>) -> impl Into
         Err(_) => {
             state.response_channels.write().await.remove(&request_id);
             // On timeout, report based on server-side state
-            let is_active = state.playtest_active.load(std::sync::atomic::Ordering::Relaxed);
+            let is_active = state
+                .playtest_active
+                .load(std::sync::atomic::Ordering::Relaxed);
             (
                 StatusCode::OK,
                 Json(serde_json::json!({
@@ -4224,8 +4004,12 @@ async fn handle_playtest_heartbeat(
     *state.last_bot_heartbeat.write().await = Some(std::time::Instant::now());
 
     // Update playtest_active based on running field
-    let was_active = state.playtest_active.load(std::sync::atomic::Ordering::Relaxed);
-    state.playtest_active.store(req.running, std::sync::atomic::Ordering::Relaxed);
+    let was_active = state
+        .playtest_active
+        .load(std::sync::atomic::Ordering::Relaxed);
+    state
+        .playtest_active
+        .store(req.running, std::sync::atomic::Ordering::Relaxed);
 
     // If running transitioned to false, mark ended_reason as completed
     if was_active && !req.running {
@@ -4596,7 +4380,9 @@ async fn handle_bot_state_update(
     *bot_state = Some(body);
 
     // Mark playtest as active and update heartbeat
-    state.playtest_active.store(true, std::sync::atomic::Ordering::Relaxed);
+    state
+        .playtest_active
+        .store(true, std::sync::atomic::Ordering::Relaxed);
     let mut heartbeat = state.last_bot_heartbeat.write().await;
     *heartbeat = Some(std::time::Instant::now());
 
@@ -4659,7 +4445,9 @@ async fn handle_bot_result_post(
             results.insert(id, body.clone());
 
             // Also update playtest heartbeat
-            state.playtest_active.store(true, std::sync::atomic::Ordering::Relaxed);
+            state
+                .playtest_active
+                .store(true, std::sync::atomic::Ordering::Relaxed);
             let mut heartbeat = state.last_bot_heartbeat.write().await;
             *heartbeat = Some(std::time::Instant::now());
 
@@ -4702,7 +4490,9 @@ async fn handle_bot_result_get(
 
 /// Check if playtest is active (GET /bot/playtest)
 async fn handle_bot_playtest_status(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    let is_active = state.playtest_active.load(std::sync::atomic::Ordering::Relaxed);
+    let is_active = state
+        .playtest_active
+        .load(std::sync::atomic::Ordering::Relaxed);
 
     // Check if heartbeat is stale (> 2 seconds - reduced from 5 for faster detection)
     let heartbeat = state.last_bot_heartbeat.read().await;
@@ -4714,7 +4504,9 @@ async fn handle_bot_playtest_status(State(state): State<Arc<AppState>>) -> impl 
 
     // Mark as inactive if stale
     if stale && is_active {
-        state.playtest_active.store(false, std::sync::atomic::Ordering::Relaxed);
+        state
+            .playtest_active
+            .store(false, std::sync::atomic::Ordering::Relaxed);
     }
 
     // Check explicit lifecycle events
@@ -4747,7 +4539,9 @@ async fn handle_bot_lifecycle(
     match event {
         "hello" => {
             // Bot connected - playtest started
-            state.playtest_active.store(true, std::sync::atomic::Ordering::Relaxed);
+            state
+                .playtest_active
+                .store(true, std::sync::atomic::Ordering::Relaxed);
             *state.playtest_started.write().await = Some(std::time::Instant::now());
             *state.playtest_ended.write().await = None;
             *state.last_bot_heartbeat.write().await = Some(std::time::Instant::now());
@@ -4761,7 +4555,9 @@ async fn handle_bot_lifecycle(
         }
         "goodbye" => {
             // Bot disconnected - playtest ended
-            state.playtest_active.store(false, std::sync::atomic::Ordering::Relaxed);
+            state
+                .playtest_active
+                .store(false, std::sync::atomic::Ordering::Relaxed);
             *state.playtest_ended.write().await = Some(std::time::Instant::now());
             tracing::info!("Playtest ended - bot disconnected (reason: {:?})", reason);
 
@@ -4771,12 +4567,10 @@ async fn handle_bot_lifecycle(
                 "message": "Bot unregistered"
             }))
         }
-        _ => {
-            Json(serde_json::json!({
-                "success": false,
-                "error": format!("Unknown lifecycle event: {}", event)
-            }))
-        }
+        _ => Json(serde_json::json!({
+            "success": false,
+            "error": format!("Unknown lifecycle event: {}", event)
+        })),
     }
 }
 
@@ -4839,9 +4633,7 @@ struct ConsoleHistoryQuery {
 }
 
 /// Subscribe to console messages via Server-Sent Events
-async fn handle_console_subscribe(
-    State(state): State<Arc<AppState>>,
-) -> impl IntoResponse {
+async fn handle_console_subscribe(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     use axum::response::sse::{Event, Sse};
     use std::convert::Infallible;
 
@@ -4868,7 +4660,7 @@ async fn handle_console_subscribe(
     Sse::new(stream).keep_alive(
         axum::response::sse::KeepAlive::new()
             .interval(std::time::Duration::from_secs(15))
-            .text("keepalive")
+            .text("keepalive"),
     )
 }
 
@@ -4914,11 +4706,14 @@ async fn handle_run_code(
     match tokio::time::timeout(timeout, rx.recv()).await {
         Ok(Some(response)) => {
             state.response_channels.write().await.remove(&request_id);
-            (StatusCode::OK, Json(serde_json::json!({
-                "success": response.success,
-                "output": response.data.get("output").and_then(|v| v.as_str()).unwrap_or(""),
-                "error": response.error
-            })))
+            (
+                StatusCode::OK,
+                Json(serde_json::json!({
+                    "success": response.success,
+                    "output": response.data.get("output").and_then(|v| v.as_str()).unwrap_or(""),
+                    "error": response.error
+                })),
+            )
         }
         Ok(None) => {
             state.response_channels.write().await.remove(&request_id);
@@ -4980,17 +4775,24 @@ async fn handle_verify(
     state.trigger.send(()).ok();
 
     // Timeout = check timeout + 5s overhead
-    let check_timeout = req.data.get("timeout").and_then(|v| v.as_u64()).unwrap_or(0);
+    let check_timeout = req
+        .data
+        .get("timeout")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
     let timeout = tokio::time::Duration::from_secs(check_timeout + 5);
 
     match tokio::time::timeout(timeout, rx.recv()).await {
         Ok(Some(response)) => {
             state.response_channels.write().await.remove(&request_id);
-            (StatusCode::OK, Json(serde_json::json!({
-                "success": response.success,
-                "data": response.data,
-                "error": response.error,
-            })))
+            (
+                StatusCode::OK,
+                Json(serde_json::json!({
+                    "success": response.success,
+                    "data": response.data,
+                    "error": response.error,
+                })),
+            )
         }
         Ok(None) => {
             state.response_channels.write().await.remove(&request_id);
@@ -5031,7 +4833,11 @@ async fn handle_read_properties(
     Json(req): Json<ReadPropertiesRequest>,
 ) -> impl IntoResponse {
     let request_id = Uuid::new_v4();
-    tracing::info!("read-properties:get request {} - path: {}", request_id, req.path);
+    tracing::info!(
+        "read-properties:get request {} - path: {}",
+        request_id,
+        req.path
+    );
     let request = PluginRequest {
         id: request_id,
         command: "read-properties:get".to_string(),
@@ -5050,7 +4856,11 @@ async fn handle_read_properties(
         queue.push_back(request);
         queue.len()
     };
-    tracing::info!("read-properties:get request {} - queued (queue length: {})", request_id, queue_len);
+    tracing::info!(
+        "read-properties:get request {} - queued (queue length: {})",
+        request_id,
+        queue_len
+    );
     state.trigger.send(()).ok();
 
     // Wait for response with timeout
@@ -5059,12 +4869,19 @@ async fn handle_read_properties(
         Ok(Some(response)) => {
             state.response_channels.write().await.remove(&request_id);
             // Plugin returns {success, data: {actual_data}}, extract the nested data field
-            let data = response.data.get("data").cloned().unwrap_or(serde_json::Value::Null);
-            (StatusCode::OK, Json(serde_json::json!({
-                "success": response.success,
-                "data": data,
-                "error": response.error
-            })))
+            let data = response
+                .data
+                .get("data")
+                .cloned()
+                .unwrap_or(serde_json::Value::Null);
+            (
+                StatusCode::OK,
+                Json(serde_json::json!({
+                    "success": response.success,
+                    "data": data,
+                    "error": response.error
+                })),
+            )
         }
         Ok(None) => {
             state.response_channels.write().await.remove(&request_id);
@@ -5147,7 +4964,11 @@ async fn handle_explore_hierarchy(
         Ok(Some(response)) => {
             state.response_channels.write().await.remove(&request_id);
             // Plugin returns {success, data: {tree_node}}, extract the nested data field
-            let data = response.data.get("data").cloned().unwrap_or(serde_json::Value::Null);
+            let data = response
+                .data
+                .get("data")
+                .cloned()
+                .unwrap_or(serde_json::Value::Null);
             (
                 StatusCode::OK,
                 Json(serde_json::json!({
@@ -5245,7 +5066,11 @@ async fn handle_find_instances(
         Ok(Some(response)) => {
             state.response_channels.write().await.remove(&request_id);
             // Plugin returns {success, data: {instances, total, limited}}, extract the nested data field
-            let data = response.data.get("data").cloned().unwrap_or(serde_json::Value::Null);
+            let data = response
+                .data
+                .get("data")
+                .cloned()
+                .unwrap_or(serde_json::Value::Null);
             (
                 StatusCode::OK,
                 Json(serde_json::json!({
@@ -5428,8 +5253,14 @@ async fn process_file_changes(state: Arc<AppState>) {
         // Send ready changes to plugin (skip if live sync is paused during extraction)
         if !ready_changes.is_empty() {
             // Check if live sync is paused (during extraction)
-            if state.live_sync_paused.load(std::sync::atomic::Ordering::Relaxed) {
-                tracing::debug!("Live sync paused, skipping {} file changes", ready_changes.len());
+            if state
+                .live_sync_paused
+                .load(std::sync::atomic::Ordering::Relaxed)
+            {
+                tracing::debug!(
+                    "Live sync paused, skipping {} file changes",
+                    ready_changes.len()
+                );
                 continue;
             }
 
@@ -5463,11 +5294,19 @@ async fn process_file_changes(state: Arc<AppState>) {
                 if let Some(ref dir) = project_dir {
                     let mut queues = state.project_queues.write().await;
                     if let Some(queue) = queues.get_mut(dir) {
-                        tracing::info!("Queued {} operations for project {}", operations.len(), dir);
+                        tracing::info!(
+                            "Queued {} operations for project {}",
+                            operations.len(),
+                            dir
+                        );
                         queue.push_back(plugin_request.clone());
                         sent = true;
                     } else {
-                        tracing::warn!("No queue for project {}, available queues: {:?}", dir, queues.keys().collect::<Vec<_>>());
+                        tracing::warn!(
+                            "No queue for project {}, available queues: {:?}",
+                            dir,
+                            queues.keys().collect::<Vec<_>>()
+                        );
                     }
                 }
 

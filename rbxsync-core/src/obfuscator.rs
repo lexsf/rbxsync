@@ -18,8 +18,7 @@ use rand::Rng;
 use serde::Deserialize;
 
 /// Configuration for the obfuscator loaded from obfuscate.toml
-#[derive(Debug, Clone, Deserialize)]
-#[derive(Default)]
+#[derive(Debug, Clone, Deserialize, Default)]
 pub struct ObfuscatorConfig {
     /// Strings to encode with hex escapes
     #[serde(default)]
@@ -31,7 +30,6 @@ pub struct ObfuscatorConfig {
     #[serde(default)]
     pub minify: MinifyConfig,
 }
-
 
 /// String encoding configuration
 #[derive(Debug, Clone, Deserialize)]
@@ -452,7 +450,7 @@ local env = getfenv(0)
         // InsertService should be hex-encoded
         assert!(!result.source.contains(r#""InsertService""#));
         assert!(result.source.contains("\\x")); // Has hex escapes
-        // Original functionality keywords preserved (not in strings)
+                                                // Original functionality keywords preserved (not in strings)
         assert!(result.source.contains("GetService"));
         assert!(result.source.contains("getfenv"));
     }

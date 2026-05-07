@@ -18,23 +18,39 @@ struct SyncBatch {
 }
 
 fn create_sync_operations(count: usize) -> Vec<SyncOperation> {
-    (0..count).map(|i| {
-        let mut inst = Instance::new("ModuleScript", &format!("Script_{}", i));
-        inst.set_property("Source", PropertyValue::String("return {}".to_string()));
-        SyncOperation { operation: "update".to_string(), path: format!("ServerScriptService.Script_{}", i), instance: Some(inst) }
-    }).collect()
+    (0..count)
+        .map(|i| {
+            let mut inst = Instance::new("ModuleScript", &format!("Script_{}", i));
+            inst.set_property("Source", PropertyValue::String("return {}".to_string()));
+            SyncOperation {
+                operation: "update".to_string(),
+                path: format!("ServerScriptService.Script_{}", i),
+                instance: Some(inst),
+            }
+        })
+        .collect()
 }
 
 fn sync_benchmarks(c: &mut Criterion) {
     let mut group = c.benchmark_group("sync");
 
-    let small = SyncBatch { operations: create_sync_operations(10), project_dir: "/test".to_string() };
-    group.bench_function("serialize_small_sync_batch", |b| b.iter(|| black_box(serde_json::to_string(&small).unwrap())));
+    let small = SyncBatch {
+        operations: create_sync_operations(10),
+        project_dir: "/test".to_string(),
+    };
+    group.bench_function("serialize_small_sync_batch", |b| {
+        b.iter(|| black_box(serde_json::to_string(&small).unwrap()))
+    });
 
-    let large = SyncBatch { operations: create_sync_operations(200), project_dir: "/test".to_string() };
+    let large = SyncBatch {
+        operations: create_sync_operations(200),
+        project_dir: "/test".to_string(),
+    };
     let size = serde_json::to_string(&large).unwrap().len();
     group.throughput(Throughput::Bytes(size as u64));
-    group.bench_function("serialize_large_sync_batch", |b| b.iter(|| black_box(serde_json::to_string(&large).unwrap())));
+    group.bench_function("serialize_large_sync_batch", |b| {
+        b.iter(|| black_box(serde_json::to_string(&large).unwrap()))
+    });
 
     group.finish();
 }

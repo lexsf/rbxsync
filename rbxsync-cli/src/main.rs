@@ -2,7 +2,7 @@
 //!
 //! Command-line interface for Roblox game extraction and synchronization.
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::fs::File;
 use std::io::BufWriter;
 use std::path::PathBuf;
@@ -16,7 +16,9 @@ use rbx_dom_weak::types::Variant;
 use rbx_dom_weak::{InstanceBuilder, WeakDom};
 use rbxsync_core::{
     build_plugin, find_existing_rbxsync_plugin, find_rojo_project, get_studio_plugins_folder,
-    install_plugin, parse_rojo_project, rojo_to_tree_mapping, PluginBuildConfig, ProjectConfig,
+    import_place_file, install_plugin, parse_rojo_project, rojo_to_tree_mapping,
+    write_serialized_instances, ExtractWriterOptions, PlaceImportOptions, PluginBuildConfig,
+    ProjectConfig,
 };
 use rbxsync_server::{run_server, ServerConfig};
 
@@ -185,6 +187,60 @@ enum Commands {
         /// Output to Studio plugins folder with this filename (e.g., MyPlugin.rbxm)
         #[arg(long)]
         plugin: Option<String>,
+    },
+
+    /// Import a .rbxl or .rbxlx place file into a RbxSync project
+    ImportPlace {
+        /// Place file to import (.rbxl or .rbxlx)
+        input: PathBuf,
+
+        /// Output project directory (default: current directory)
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+
+        /// Project name for generated config and tooling files
+        #[arg(long)]
+        name: Option<String>,
+
+        /// Specific services to import, comma-separated or repeated
+        #[arg(long, value_delimiter = ',')]
+        services: Option<Vec<String>>,
+
+        /// Include Terrain instances
+        #[arg(long)]
+        terrain: bool,
+
+        /// Allow replacing an existing src directory
+        #[arg(long)]
+        force: bool,
+
+        /// Keep the default backup behavior before replacing src
+        #[arg(long, conflicts_with = "no_backup")]
+        backup: bool,
+
+        /// Replace src directly without creating .rbxsync-backup/src
+        #[arg(long)]
+        no_backup: bool,
+
+        /// Generate default.project.json, selene.toml, and wally.toml
+        #[arg(long, conflicts_with = "no_tooling")]
+        tooling: bool,
+
+        /// Do not generate default.project.json, selene.toml, or wally.toml
+        #[arg(long)]
+        no_tooling: bool,
+
+        /// Parse and summarize without writing files
+        #[arg(long)]
+        dry_run: bool,
+
+        /// Emit a machine-readable JSON summary
+        #[arg(long)]
+        json: bool,
+
+        /// Suppress human-readable progress output
+        #[arg(short, long)]
+        quiet: bool,
     },
 
     /// Format project JSON files with consistent style
@@ -471,8 +527,14 @@ fn check_duplicate_installations() {
                 .unwrap_or("unknown");
 
             if other_version != current_version {
-                eprintln!("⚠️  Warning: Multiple rbxsync installations detected with different versions!");
-                eprintln!("   Running:  {} (v{})", current_exe.display(), current_version);
+                eprintln!(
+                    "⚠️  Warning: Multiple rbxsync installations detected with different versions!"
+                );
+                eprintln!(
+                    "   Running:  {} (v{})",
+                    current_exe.display(),
+                    current_version
+                );
                 eprintln!("   Found:    {} (v{})", path_str, other_version);
                 eprintln!();
                 eprintln!("   This can cause confusion. To fix, remove the older version:");
@@ -485,21 +547,34 @@ fn check_duplicate_installations() {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    let cli = Cli::parse();
+    let quiet_logging = matches!(
+        &cli.command,
+        Commands::ImportPlace { json: true, .. } | Commands::ImportPlace { quiet: true, .. }
+    );
+
     // Initialize logging
+    let log_directive = if quiet_logging {
+        "rbxsync=warn"
+    } else {
+        "rbxsync=info"
+    };
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::from_default_env()
-                .add_directive("rbxsync=info".parse().unwrap()),
+                .add_directive(log_directive.parse().unwrap()),
         )
         .init();
 
     // Check for duplicate installations that might cause confusion
     check_duplicate_installations();
 
-    let cli = Cli::parse();
-
     match cli.command {
-        Commands::Init { name, path, no_sourcemap } => {
+        Commands::Init {
+            name,
+            path,
+            no_sourcemap,
+        } => {
             cmd_init(name, path, no_sourcemap).await?;
         }
         Commands::Studio { place, serve } => {
@@ -539,7 +614,14 @@ async fn main() -> Result<()> {
             no_obfuscate,
             obfuscate_config,
         } => {
-            cmd_build_plugin(source, output, name, install, !no_obfuscate, obfuscate_config)?;
+            cmd_build_plugin(
+                source,
+                output,
+                name,
+                install,
+                !no_obfuscate,
+                obfuscate_config,
+            )?;
         }
         Commands::Plugin { action } => {
             cmd_plugin(action).await?;
@@ -560,13 +642,46 @@ async fn main() -> Result<()> {
         } => {
             cmd_build(path, output, format, watch, plugin).await?;
         }
+        Commands::ImportPlace {
+            input,
+            output,
+            name,
+            services,
+            terrain,
+            force,
+            backup,
+            no_backup,
+            tooling,
+            no_tooling,
+            dry_run,
+            json,
+            quiet,
+        } => {
+            let backup = backup || !no_backup;
+            let tooling = if tooling {
+                Some(true)
+            } else if no_tooling {
+                Some(false)
+            } else {
+                None
+            };
+            cmd_import_place(
+                input, output, name, services, terrain, force, backup, tooling, dry_run, json,
+                quiet,
+            )
+            .await?;
+        }
         Commands::FmtProject { path, check } => {
             cmd_fmt_project(path, check)?;
         }
         Commands::Doc => {
             cmd_doc()?;
         }
-        Commands::Update { from_source, vscode, yes } => {
+        Commands::Update {
+            from_source,
+            vscode,
+            yes,
+        } => {
             cmd_update(from_source, vscode, yes).await?;
         }
         Commands::Version => {
@@ -585,7 +700,11 @@ async fn main() -> Result<()> {
                 println!("  API key would be set to: {}...", &key[..8.min(key.len())]);
             }
         }
-        Commands::Uninstall { vscode, keep_repo, yes } => {
+        Commands::Uninstall {
+            vscode,
+            keep_repo,
+            yes,
+        } => {
             cmd_uninstall(vscode, keep_repo, yes)?;
         }
         Commands::Migrate { from, path, force } => {
@@ -676,7 +795,8 @@ async fn cmd_init(name: Option<String>, path: Option<PathBuf>, no_sourcemap: boo
         std::fs::write(&gitignore_path, new_content).context("Failed to write .gitignore")?;
     } else if !gitignore_path.exists() {
         // Create new .gitignore if it doesn't exist
-        let gitignore_content = "# RbxSync\n.rbxsync/\n*.rbxl\n*.rbxlx\n\n# OS files\n.DS_Store\nThumbs.db\n";
+        let gitignore_content =
+            "# RbxSync\n.rbxsync/\n*.rbxl\n*.rbxlx\n\n# OS files\n.DS_Store\nThumbs.db\n";
         std::fs::write(&gitignore_path, gitignore_content).context("Failed to write .gitignore")?;
     }
 
@@ -688,7 +808,10 @@ async fn cmd_init(name: Option<String>, path: Option<PathBuf>, no_sourcemap: boo
         std::fs::write(&sourcemap_path, json).context("Failed to write sourcemap.json")?;
     }
 
-    println!("Initialized RbxSync project '{}' at {:?}", project_name, project_dir);
+    println!(
+        "Initialized RbxSync project '{}' at {:?}",
+        project_name, project_dir
+    );
     println!("\nProject structure:");
     println!("  rbxsync.json      - Project configuration");
     println!("  src/              - Instance tree");
@@ -715,7 +838,12 @@ async fn cmd_studio(place: Option<PathBuf>, serve: bool) -> Result<()> {
     // Optionally start the sync server
     if serve {
         let client = reqwest::Client::new();
-        if client.get("http://localhost:44755/health").send().await.is_err() {
+        if client
+            .get("http://localhost:44755/health")
+            .send()
+            .await
+            .is_err()
+        {
             println!("Starting sync server in background...");
             let config = ServerConfig::default();
             tokio::spawn(async move {
@@ -768,9 +896,7 @@ async fn cmd_studio(place: Option<PathBuf>, serve: bool) -> Result<()> {
     let mut command = std::process::Command::new("open");
 
     println!("Launching Roblox Studio...");
-    command
-        .spawn()
-        .context("Failed to launch Roblox Studio")?;
+    command.spawn().context("Failed to launch Roblox Studio")?;
 
     if let Some(place_file) = place {
         println!("Opening: {}", place_file.display());
@@ -790,7 +916,12 @@ async fn cmd_debug(action: DebugAction) -> Result<()> {
     let client = reqwest::Client::new();
 
     // Check server is running
-    if client.get("http://localhost:44755/health").send().await.is_err() {
+    if client
+        .get("http://localhost:44755/health")
+        .send()
+        .await
+        .is_err()
+    {
         println!("RbxSync server is not running. Start it with: rbxsync serve");
         return Ok(());
     }
@@ -812,7 +943,11 @@ async fn cmd_debug(action: DebugAction) -> Result<()> {
                 .context("Failed to send debug start command")?;
 
             let result: serde_json::Value = response.json().await?;
-            if result.get("success").and_then(|v| v.as_bool()).unwrap_or(false) {
+            if result
+                .get("success")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false)
+            {
                 println!("Playtest started.");
             } else {
                 let error = result
@@ -836,7 +971,11 @@ async fn cmd_debug(action: DebugAction) -> Result<()> {
                 .context("Failed to send debug stop command")?;
 
             let result: serde_json::Value = response.json().await?;
-            if result.get("success").and_then(|v| v.as_bool()).unwrap_or(false) {
+            if result
+                .get("success")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false)
+            {
                 println!("Playtest stopped.");
             } else {
                 let error = result
@@ -858,10 +997,20 @@ async fn cmd_debug(action: DebugAction) -> Result<()> {
                 .context("Failed to get debug status")?;
 
             let result: serde_json::Value = response.json().await?;
-            if result.get("success").and_then(|v| v.as_bool()).unwrap_or(false) {
+            if result
+                .get("success")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false)
+            {
                 let data = result.get("data").cloned().unwrap_or_default();
-                let running = data.get("running").and_then(|v| v.as_bool()).unwrap_or(false);
-                let mode = data.get("mode").and_then(|v| v.as_str()).unwrap_or("unknown");
+                let running = data
+                    .get("running")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+                let mode = data
+                    .get("mode")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("unknown");
 
                 if running {
                     println!("Playtest is running (mode: {})", mode);
@@ -980,7 +1129,10 @@ async fn cmd_extract(
         .context("Failed to start extraction")?;
 
     let result: serde_json::Value = response.json().await?;
-    println!("Extraction started: {}", serde_json::to_string_pretty(&result)?);
+    println!(
+        "Extraction started: {}",
+        serde_json::to_string_pretty(&result)?
+    );
 
     println!("\nWaiting for Studio plugin to send data...");
     println!("Make sure the RbxSync plugin is enabled in Roblox Studio.");
@@ -998,7 +1150,10 @@ async fn cmd_extract(
 
         if let Some(complete) = status.get("complete").and_then(|v| v.as_bool()) {
             if complete {
-                let chunks = status.get("chunksReceived").and_then(|v| v.as_u64()).unwrap_or(0);
+                let chunks = status
+                    .get("chunksReceived")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0);
                 println!("\nExtraction complete! Received {} chunks.", chunks);
                 break;
             }
@@ -1014,6 +1169,331 @@ async fn cmd_extract(
     }
 
     Ok(())
+}
+
+/// Import a local Roblox place file into a RbxSync project.
+#[allow(clippy::too_many_arguments)]
+async fn cmd_import_place(
+    input: PathBuf,
+    output: Option<PathBuf>,
+    name: Option<String>,
+    services: Option<Vec<String>>,
+    terrain: bool,
+    force: bool,
+    backup_existing_src: bool,
+    tooling_override: Option<bool>,
+    dry_run: bool,
+    json_output: bool,
+    quiet: bool,
+) -> Result<()> {
+    let input_path = input
+        .canonicalize()
+        .with_context(|| format!("Failed to resolve input path {}", input.display()))?;
+    let project_dir_input = output.unwrap_or(std::env::current_dir()?);
+    let project_dir = project_dir_input
+        .canonicalize()
+        .unwrap_or(project_dir_input);
+
+    let config_path = project_dir.join("rbxsync.json");
+    let existing_config = read_project_config(&config_path)?;
+    let project_name = name
+        .clone()
+        .or_else(|| existing_config.as_ref().map(|config| config.name.clone()))
+        .or_else(|| {
+            input_path
+                .file_stem()
+                .map(|stem| stem.to_string_lossy().to_string())
+        })
+        .unwrap_or_else(|| "MyGame".to_string());
+
+    let config = existing_config.clone().unwrap_or_else(|| ProjectConfig {
+        name: project_name.clone(),
+        ..Default::default()
+    });
+
+    let selected_services = services.map(|values| {
+        values
+            .into_iter()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+            .collect::<HashSet<_>>()
+    });
+
+    if !json_output && !quiet {
+        println!("Importing place: {}", input_path.display());
+        println!("Output: {}", project_dir.display());
+    }
+
+    let import_result = import_place_file(PlaceImportOptions {
+        input_path: input_path.clone(),
+        services: selected_services,
+        include_terrain: terrain,
+    })?;
+
+    let imported_services = imported_services(&import_result.instances);
+    let scripts_planned = count_scripts(&import_result.instances);
+    let generate_tooling_files = tooling_override.unwrap_or(config.config.generate_tooling_files);
+    let tooling_files = tooling_file_names(generate_tooling_files);
+
+    if dry_run {
+        if json_output || !quiet {
+            print_import_summary(
+                json_output,
+                true,
+                &input_path,
+                &project_dir,
+                import_result.format,
+                import_result.instances.len(),
+                scripts_planned,
+                None,
+                None,
+                &imported_services,
+                &import_result.diagnostics,
+                &tooling_files,
+                false,
+                backup_existing_src,
+            )?;
+        }
+        return Ok(());
+    }
+
+    let src_dir = project_dir.join("src");
+    if src_dir.exists() && !force {
+        bail!(
+            "{} already exists. Re-run with --force to replace it{}.",
+            src_dir.display(),
+            if backup_existing_src {
+                " and create .rbxsync-backup/src"
+            } else {
+                " without a backup"
+            }
+        );
+    }
+
+    if !backup_existing_src && src_dir.exists() {
+        std::fs::remove_dir_all(&src_dir)
+            .with_context(|| format!("Failed to remove {}", src_dir.display()))?;
+    }
+
+    std::fs::create_dir_all(&project_dir)
+        .with_context(|| format!("Failed to create {}", project_dir.display()))?;
+
+    if existing_config.is_none() {
+        let config_json = serde_json::to_string_pretty(&config)?;
+        std::fs::write(&config_path, config_json).context("Failed to write rbxsync.json")?;
+    }
+
+    let (preserve_packages, packages_folder) = package_writer_options(&config);
+    let writer_summary = write_serialized_instances(
+        import_result.instances.clone(),
+        ExtractWriterOptions {
+            project_dir: project_dir.clone(),
+            tree_mapping: config.tree_mapping.clone(),
+            preserve_packages,
+            packages_folder,
+            generate_tooling_files,
+            project_name: Some(project_name),
+        },
+    )
+    .await?;
+
+    if json_output || !quiet {
+        print_import_summary(
+            json_output,
+            false,
+            &input_path,
+            &project_dir,
+            import_result.format,
+            writer_summary.total_instances,
+            scripts_planned,
+            Some(writer_summary.files_written),
+            Some(writer_summary.scripts_written),
+            &imported_services,
+            &import_result.diagnostics,
+            &tooling_files,
+            writer_summary.packages_preserved,
+            backup_existing_src,
+        )?;
+    }
+
+    Ok(())
+}
+
+fn read_project_config(config_path: &std::path::Path) -> Result<Option<ProjectConfig>> {
+    if !config_path.exists() {
+        return Ok(None);
+    }
+
+    let content = std::fs::read_to_string(config_path)
+        .with_context(|| format!("Failed to read {}", config_path.display()))?;
+    let config = serde_json::from_str(&content)
+        .with_context(|| format!("Failed to parse {}", config_path.display()))?;
+    Ok(Some(config))
+}
+
+fn package_writer_options(config: &ProjectConfig) -> (bool, String) {
+    if let Some(packages) = &config.packages {
+        (
+            packages.enabled && packages.preserve_on_extract,
+            packages.packages_folder.to_string_lossy().to_string(),
+        )
+    } else {
+        (false, "Packages".to_string())
+    }
+}
+
+fn imported_services(instances: &[serde_json::Value]) -> Vec<String> {
+    let mut services = instances
+        .iter()
+        .filter_map(|instance| instance.get("path").and_then(|path| path.as_str()))
+        .filter_map(|path| path.split('/').next())
+        .filter(|service| !service.is_empty())
+        .map(str::to_string)
+        .collect::<HashSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+    services.sort();
+    services
+}
+
+fn count_scripts(instances: &[serde_json::Value]) -> usize {
+    instances
+        .iter()
+        .filter(|instance| {
+            matches!(
+                instance.get("className").and_then(|class| class.as_str()),
+                Some("Script" | "LocalScript" | "ModuleScript")
+            )
+        })
+        .count()
+}
+
+fn tooling_file_names(generate_tooling_files: bool) -> Vec<&'static str> {
+    if generate_tooling_files {
+        vec!["default.project.json", "selene.toml", "wally.toml"]
+    } else {
+        Vec::new()
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn print_import_summary(
+    json_output: bool,
+    dry_run: bool,
+    input_path: &std::path::Path,
+    project_dir: &std::path::Path,
+    format: rbxsync_core::PlaceFileFormat,
+    total_instances: usize,
+    scripts_planned: usize,
+    files_written: Option<usize>,
+    scripts_written: Option<usize>,
+    imported_services: &[String],
+    diagnostics: &[rbxsync_core::ImportDiagnostic],
+    tooling_files: &[&str],
+    packages_preserved: bool,
+    backup_existing_src: bool,
+) -> Result<()> {
+    if json_output {
+        let diagnostic_summary = diagnostic_summary(diagnostics);
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "success": true,
+                "dryRun": dry_run,
+                "input": input_path,
+                "output": project_dir,
+                "format": format,
+                "totalInstances": total_instances,
+                "scripts": scripts_planned,
+                "jsonFilesWritten": files_written,
+                "scriptsWritten": scripts_written,
+                "services": imported_services,
+                "serviceCount": imported_services.len(),
+                "diagnostics": diagnostics,
+                "diagnosticCount": diagnostics.len(),
+                "diagnosticSummary": diagnostic_summary,
+                "toolingFiles": tooling_files,
+                "packagesPreserved": packages_preserved,
+                "backupExistingSrc": backup_existing_src,
+            }))?
+        );
+        return Ok(());
+    }
+
+    println!("Format: {:?}", format);
+    if dry_run {
+        println!("Dry run: no files written");
+    }
+    println!(
+        "Imported {} instances across {} services",
+        total_instances,
+        imported_services.len()
+    );
+    if !imported_services.is_empty() {
+        println!("Services: {}", imported_services.join(", "));
+    }
+
+    if let (Some(json_count), Some(script_count)) = (files_written, scripts_written) {
+        println!(
+            "Wrote {} scripts and {} .rbxjson files",
+            script_count, json_count
+        );
+        if !tooling_files.is_empty() {
+            println!("Generated tooling files: {}", tooling_files.join(", "));
+        }
+    } else {
+        println!(
+            "Would write {} scripts and {} .rbxjson files",
+            scripts_planned, total_instances
+        );
+        if !tooling_files.is_empty() {
+            println!("Would generate tooling files: {}", tooling_files.join(", "));
+        }
+    }
+
+    if packages_preserved {
+        println!("Preserved packages from existing project backup");
+    }
+
+    if !diagnostics.is_empty() {
+        let diagnostic_summary = diagnostic_summary(diagnostics);
+        let summary = diagnostic_summary
+            .iter()
+            .map(|(kind, count)| format!("{}={}", kind, count))
+            .collect::<Vec<_>>()
+            .join(", ");
+        println!("Warnings: {} ({})", diagnostics.len(), summary);
+        for diagnostic in diagnostics.iter().take(5) {
+            if let Some(property) = &diagnostic.property {
+                println!(
+                    "  - {:?} {} {}: {}",
+                    diagnostic.kind, diagnostic.path, property, diagnostic.message
+                );
+            } else {
+                println!(
+                    "  - {:?} {}: {}",
+                    diagnostic.kind, diagnostic.path, diagnostic.message
+                );
+            }
+        }
+        if diagnostics.len() > 5 {
+            println!("  ... {} more", diagnostics.len() - 5);
+        }
+    }
+
+    Ok(())
+}
+
+fn diagnostic_summary(diagnostics: &[rbxsync_core::ImportDiagnostic]) -> BTreeMap<String, usize> {
+    let mut summary = BTreeMap::new();
+    for diagnostic in diagnostics {
+        let key = serde_json::to_value(&diagnostic.kind)
+            .ok()
+            .and_then(|value| value.as_str().map(str::to_string))
+            .unwrap_or_else(|| format!("{:?}", diagnostic.kind));
+        *summary.entry(key).or_insert(0) += 1;
+    }
+    summary
 }
 
 /// Detect project structure for zero-config mode
@@ -1085,8 +1565,8 @@ async fn cmd_serve(port: u16, background: bool) -> Result<()> {
         println!();
     } else {
         // Validate JSON is parseable if config exists
-        let config_content = std::fs::read_to_string(&config_path)
-            .context("Failed to read rbxsync.json")?;
+        let config_content =
+            std::fs::read_to_string(&config_path).context("Failed to read rbxsync.json")?;
 
         if let Err(e) = serde_json::from_str::<serde_json::Value>(&config_content) {
             eprintln!("Error: Invalid JSON in rbxsync.json");
@@ -1208,6 +1688,20 @@ fn is_port_available(port: u16) -> bool {
     std::net::TcpListener::bind(format!("127.0.0.1:{}", port)).is_ok()
 }
 
+/// Wait until a port can be bound locally, indicating the server released it.
+async fn wait_for_port_release(port: u16, timeout_ms: u64) -> bool {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(timeout_ms);
+
+    while std::time::Instant::now() < deadline {
+        if is_port_available(port) {
+            return true;
+        }
+        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+    }
+
+    is_port_available(port)
+}
+
 /// Stop server on a specific port
 async fn stop_server_on_port(port: u16) -> Result<()> {
     // First, try to find any rbxsync server processes by port
@@ -1233,7 +1727,7 @@ async fn stop_server_on_port(port: u16) -> Result<()> {
                 .build()?;
 
             let url = format!("http://localhost:{}/shutdown", port);
-            let _ = client.post(&url).send().await;  // Ignore result, check if port is released
+            let _ = client.post(&url).send().await; // Ignore result, check if port is released
 
             // Wait briefly for graceful shutdown
             if wait_for_port_release(port, 2000).await {
@@ -1316,7 +1810,10 @@ async fn cmd_status() -> Result<()> {
                 .json::<serde_json::Value>()
                 .await?;
 
-            println!("Extraction status: {}", serde_json::to_string_pretty(&status)?);
+            println!(
+                "Extraction status: {}",
+                serde_json::to_string_pretty(&status)?
+            );
         }
         Err(_) => {
             println!("Server is not running.");
@@ -1335,7 +1832,12 @@ async fn cmd_diff() -> Result<()> {
     let client = reqwest::Client::new();
 
     // Check server is running
-    if client.get("http://localhost:44755/health").send().await.is_err() {
+    if client
+        .get("http://localhost:44755/health")
+        .send()
+        .await
+        .is_err()
+    {
         println!("RbxSync server is not running. Start it with: rbxsync serve");
         return Ok(());
     }
@@ -1355,23 +1857,43 @@ async fn cmd_diff() -> Result<()> {
     let diff: serde_json::Value = response.json().await?;
 
     if diff.get("success").and_then(|v| v.as_bool()) != Some(true) {
-        let error = diff.get("error").and_then(|v| v.as_str()).unwrap_or("Unknown error");
+        let error = diff
+            .get("error")
+            .and_then(|v| v.as_str())
+            .unwrap_or("Unknown error");
         println!("Error: {}", error);
         return Ok(());
     }
 
-    let added = diff.get("added").and_then(|v| v.as_array()).cloned().unwrap_or_default();
-    let removed = diff.get("removed").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+    let added = diff
+        .get("added")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+    let removed = diff
+        .get("removed")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
     let common = diff.get("common").and_then(|v| v.as_u64()).unwrap_or(0);
     let file_count = diff.get("file_count").and_then(|v| v.as_u64()).unwrap_or(0);
-    let studio_count = diff.get("studio_count").and_then(|v| v.as_u64()).unwrap_or(0);
+    let studio_count = diff
+        .get("studio_count")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
 
     // Print added (in files, not in Studio)
     if !added.is_empty() {
-        println!("\n\x1b[32mFiles → Studio (would be created): {}\x1b[0m", added.len());
+        println!(
+            "\n\x1b[32mFiles → Studio (would be created): {}\x1b[0m",
+            added.len()
+        );
         for entry in added.iter().take(20) {
             let path = entry.get("path").and_then(|v| v.as_str()).unwrap_or("");
-            let class = entry.get("className").and_then(|v| v.as_str()).unwrap_or("");
+            let class = entry
+                .get("className")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
             println!("  + {} ({})", path, class);
         }
         if added.len() > 20 {
@@ -1381,10 +1903,16 @@ async fn cmd_diff() -> Result<()> {
 
     // Print removed (in Studio, not in files)
     if !removed.is_empty() {
-        println!("\n\x1b[31mStudio only (would be deleted with --delete): {}\x1b[0m", removed.len());
+        println!(
+            "\n\x1b[31mStudio only (would be deleted with --delete): {}\x1b[0m",
+            removed.len()
+        );
         for entry in removed.iter().take(20) {
             let path = entry.get("path").and_then(|v| v.as_str()).unwrap_or("");
-            let class = entry.get("className").and_then(|v| v.as_str()).unwrap_or("");
+            let class = entry
+                .get("className")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
             println!("  - {} ({})", path, class);
         }
         if removed.len() > 20 {
@@ -1417,7 +1945,12 @@ async fn cmd_sync(path: Option<PathBuf>, delete: bool) -> Result<()> {
     let client = reqwest::Client::new();
 
     // Check server is running
-    if client.get("http://localhost:44755/health").send().await.is_err() {
+    if client
+        .get("http://localhost:44755/health")
+        .send()
+        .await
+        .is_err()
+    {
         println!("RbxSync server is not running. Start it with: rbxsync serve");
         return Ok(());
     }
@@ -1434,7 +1967,11 @@ async fn cmd_sync(path: Option<PathBuf>, delete: bool) -> Result<()> {
         .context("Failed to read local tree")?;
 
     let tree: serde_json::Value = tree_response.json().await?;
-    let instances = tree.get("instances").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+    let instances = tree
+        .get("instances")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
 
     // Build sync operations for updates
     let mut operations: Vec<serde_json::Value> = instances
@@ -1461,13 +1998,20 @@ async fn cmd_sync(path: Option<PathBuf>, delete: bool) -> Result<()> {
             .context("Failed to get diff")?;
 
         let diff: serde_json::Value = diff_response.json().await?;
-        let removed = diff.get("removed").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+        let removed = diff
+            .get("removed")
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default();
 
         if !removed.is_empty() {
             println!("Found {} orphaned instances to delete", removed.len());
             for entry in removed {
                 let path = entry.get("path").and_then(|v| v.as_str()).unwrap_or("");
-                let class_name = entry.get("class_name").and_then(|v| v.as_str()).unwrap_or("Instance");
+                let class_name = entry
+                    .get("class_name")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("Instance");
                 println!("  \x1b[31m- {}\x1b[0m ({})", path, class_name);
                 operations.push(serde_json::json!({
                     "type": "delete",
@@ -1482,11 +2026,20 @@ async fn cmd_sync(path: Option<PathBuf>, delete: bool) -> Result<()> {
         return Ok(());
     }
 
-    let update_count = operations.iter().filter(|op| op.get("type").and_then(|v| v.as_str()) == Some("update")).count();
-    let delete_count = operations.iter().filter(|op| op.get("type").and_then(|v| v.as_str()) == Some("delete")).count();
+    let update_count = operations
+        .iter()
+        .filter(|op| op.get("type").and_then(|v| v.as_str()) == Some("update"))
+        .count();
+    let delete_count = operations
+        .iter()
+        .filter(|op| op.get("type").and_then(|v| v.as_str()) == Some("delete"))
+        .count();
 
     if delete_count > 0 {
-        println!("Syncing {} updates and {} deletes to Studio...", update_count, delete_count);
+        println!(
+            "Syncing {} updates and {} deletes to Studio...",
+            update_count, delete_count
+        );
     } else {
         println!("Syncing {} instances to Studio...", update_count);
     }
@@ -1503,15 +2056,29 @@ async fn cmd_sync(path: Option<PathBuf>, delete: bool) -> Result<()> {
 
     let result: serde_json::Value = sync_response.json().await?;
 
-    if result.get("success").and_then(|v| v.as_bool()).unwrap_or(false) {
+    if result
+        .get("success")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+    {
         // Use our own counts since server response may not include all operations
         if delete_count > 0 {
-            println!("\x1b[32m✓ Synced {} instances, deleted {} orphans.\x1b[0m", update_count, delete_count);
+            println!(
+                "\x1b[32m✓ Synced {} instances, deleted {} orphans.\x1b[0m",
+                update_count, delete_count
+            );
         } else {
-            println!("\x1b[32m✓ Synced {} instances to Studio.\x1b[0m", update_count);
+            println!(
+                "\x1b[32m✓ Synced {} instances to Studio.\x1b[0m",
+                update_count
+            );
         }
     } else {
-        let errors = result.get("errors").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+        let errors = result
+            .get("errors")
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default();
         println!("Sync completed with errors:");
         for err in errors {
             println!("  - {}", err);
@@ -1519,15 +2086,19 @@ async fn cmd_sync(path: Option<PathBuf>, delete: bool) -> Result<()> {
     }
 
     // Check for terrain data and sync if present
-    let terrain_file = project_dir.join("src").join("Workspace").join("Terrain").join("terrain.rbxjson");
+    let terrain_file = project_dir
+        .join("src")
+        .join("Workspace")
+        .join("Terrain")
+        .join("terrain.rbxjson");
     if terrain_file.exists() {
         println!("Syncing terrain...");
 
         // Read terrain data
-        let terrain_json = std::fs::read_to_string(&terrain_file)
-            .context("Failed to read terrain file")?;
-        let terrain_data: serde_json::Value = serde_json::from_str(&terrain_json)
-            .context("Failed to parse terrain file")?;
+        let terrain_json =
+            std::fs::read_to_string(&terrain_file).context("Failed to read terrain file")?;
+        let terrain_data: serde_json::Value =
+            serde_json::from_str(&terrain_json).context("Failed to parse terrain file")?;
 
         // Send terrain sync command
         let terrain_response = client
@@ -1545,14 +2116,20 @@ async fn cmd_sync(path: Option<PathBuf>, delete: bool) -> Result<()> {
 
         let terrain_result: serde_json::Value = terrain_response.json().await?;
 
-        if terrain_result.get("success").and_then(|v| v.as_bool()).unwrap_or(false) {
-            let chunks = terrain_result.get("data")
+        if terrain_result
+            .get("success")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+        {
+            let chunks = terrain_result
+                .get("data")
                 .and_then(|d| d.get("chunksApplied"))
                 .and_then(|c| c.as_u64())
                 .unwrap_or(0);
             println!("\x1b[32m✓ Synced {} terrain chunks.\x1b[0m", chunks);
         } else {
-            let error = terrain_result.get("error")
+            let error = terrain_result
+                .get("error")
                 .or_else(|| terrain_result.get("data").and_then(|d| d.get("error")))
                 .and_then(|e| e.as_str())
                 .unwrap_or("Unknown error");
@@ -1589,7 +2166,8 @@ fn cmd_build_plugin(
         println!("Obfuscation: disabled");
     }
 
-    let (output_path, stats) = build_plugin_with_stats(&config).context("Failed to build plugin")?;
+    let (output_path, stats) =
+        build_plugin_with_stats(&config).context("Failed to build plugin")?;
 
     println!("\n\x1b[32m✓ Plugin built successfully\x1b[0m");
     println!("  Output: {}", output_path.display());
@@ -1600,13 +2178,19 @@ fn cmd_build_plugin(
 
     if install {
         println!("\nInstalling plugin to Studio...");
-        let installed_path =
-            install_plugin(&output_path, &config.plugin_name).context("Failed to install plugin")?;
-        println!("\x1b[32m✓ Plugin installed\x1b[0m: {}", installed_path.display());
+        let installed_path = install_plugin(&output_path, &config.plugin_name)
+            .context("Failed to install plugin")?;
+        println!(
+            "\x1b[32m✓ Plugin installed\x1b[0m: {}",
+            installed_path.display()
+        );
         println!("\nRestart Roblox Studio to load the plugin.");
     } else {
         println!("\nTo install, run: rbxsync build-plugin --install");
-        println!("Or manually copy {} to your Studio plugins folder.", output_path.display());
+        println!(
+            "Or manually copy {} to your Studio plugins folder.",
+            output_path.display()
+        );
     }
 
     Ok(())
@@ -1614,17 +2198,25 @@ fn cmd_build_plugin(
 
 /// Manage the Studio plugin
 async fn cmd_plugin(action: PluginAction) -> Result<()> {
-    let plugins_folder = get_studio_plugins_folder()
-        .context("Could not determine Studio plugins folder")?;
+    let plugins_folder =
+        get_studio_plugins_folder().context("Could not determine Studio plugins folder")?;
 
     match action {
-        PluginAction::Install { path, name, download, force } => {
+        PluginAction::Install {
+            path,
+            name,
+            download,
+            force,
+        } => {
             let plugin_name = name.unwrap_or_else(|| "RbxSync".to_string());
 
             // Check for existing marketplace plugin
             if !force {
                 if let Some(existing) = find_existing_rbxsync_plugin() {
-                    println!("\x1b[33m⚠ Existing RbxSync plugin detected:\x1b[0m {}", existing.display());
+                    println!(
+                        "\x1b[33m⚠ Existing RbxSync plugin detected:\x1b[0m {}",
+                        existing.display()
+                    );
                     println!();
                     println!("Marketplace plugin detected. Please uninstall from Roblox first,");
                     println!("or use --force to install anyway.");
@@ -1684,7 +2276,11 @@ async fn cmd_plugin(action: PluginAction) -> Result<()> {
             }
 
             std::fs::remove_file(&plugin_path).context("Failed to remove plugin file")?;
-            println!("Plugin '{}' uninstalled from: {}", plugin_name, plugin_path.display());
+            println!(
+                "Plugin '{}' uninstalled from: {}",
+                plugin_name,
+                plugin_path.display()
+            );
             println!("\nRestart Roblox Studio to apply changes.");
         }
         PluginAction::List => {
@@ -1823,8 +2419,12 @@ fn build_sourcemap_node(
                 };
 
                 if include_non_scripts || has_init || actual_class != "Folder" {
-                    let child_node =
-                        build_sourcemap_node(&entry_name, actual_class, &entry_path, include_non_scripts)?;
+                    let child_node = build_sourcemap_node(
+                        &entry_name,
+                        actual_class,
+                        &entry_path,
+                        include_non_scripts,
+                    )?;
                     children.push(child_node);
                 }
             } else if let Some(ext) = entry_path.extension() {
@@ -1853,7 +2453,11 @@ fn build_sourcemap_node(
                     let class_name = if let Ok(content) = std::fs::read_to_string(&entry_path) {
                         serde_json::from_str::<serde_json::Value>(&content)
                             .ok()
-                            .and_then(|v| v.get("className").and_then(|c| c.as_str()).map(String::from))
+                            .and_then(|v| {
+                                v.get("className")
+                                    .and_then(|c| c.as_str())
+                                    .map(String::from)
+                            })
                             .unwrap_or_else(|| "Instance".to_string())
                     } else {
                         "Instance".to_string()
@@ -1879,9 +2483,7 @@ fn build_sourcemap_node(
 
 /// Parse script name and class from filename
 fn parse_script_name(filename: &str) -> (String, &'static str) {
-    let name = filename
-        .trim_end_matches(".luau")
-        .trim_end_matches(".lua");
+    let name = filename.trim_end_matches(".luau").trim_end_matches(".lua");
 
     if name.ends_with(".server") {
         (name.trim_end_matches(".server").to_string(), "Script")
@@ -1914,14 +2516,17 @@ async fn cmd_build(
         "rbxm" | "model" => ("rbxm", false),
         "rbxlx" | "place-xml" => ("rbxlx", true),
         "rbxmx" | "model-xml" => ("rbxmx", true),
-        _ => bail!("Unknown format: {}. Use rbxl, rbxm, rbxlx, or rbxmx", format),
+        _ => bail!(
+            "Unknown format: {}. Use rbxl, rbxm, rbxlx, or rbxmx",
+            format
+        ),
     };
 
     // Determine output path
     let output_path = if let Some(plugin_name) = &plugin {
         // Output to Studio plugins folder
-        let plugins_folder = get_studio_plugins_folder()
-            .context("Could not determine Studio plugins folder")?;
+        let plugins_folder =
+            get_studio_plugins_folder().context("Could not determine Studio plugins folder")?;
         std::fs::create_dir_all(&plugins_folder).ok();
         plugins_folder.join(plugin_name)
     } else if let Some(out) = output {
@@ -2002,9 +2607,8 @@ fn do_build(src_dir: &PathBuf, output_path: &PathBuf, extension: &str, is_xml: b
     }
 
     // Write to file
-    let output_file = BufWriter::new(
-        File::create(output_path).context("Failed to create output file")?,
-    );
+    let output_file =
+        BufWriter::new(File::create(output_path).context("Failed to create output file")?);
 
     // Export the children (services/instances) directly, not the root wrapper
     // For places: services should have null parent referent (top-level in file)
@@ -2060,7 +2664,11 @@ fn build_dom_from_src(src_dir: &std::path::Path, is_place: bool) -> Result<WeakD
 
             // Recursively add children
             build_dom_children(&mut dom, service_ref, &entry_path)?;
-        } else if entry_path.extension().map(|e| e == "rbxjson").unwrap_or(false) {
+        } else if entry_path
+            .extension()
+            .map(|e| e == "rbxjson")
+            .unwrap_or(false)
+        {
             // .rbxjson file becomes an instance
             let instance_name = entry_path
                 .file_stem()
@@ -2088,7 +2696,11 @@ fn build_dom_from_src(src_dir: &std::path::Path, is_place: bool) -> Result<WeakD
                     dom.insert(root_ref, builder);
                 }
             }
-        } else if entry_path.extension().map(|e| e == "luau" || e == "lua").unwrap_or(false) {
+        } else if entry_path
+            .extension()
+            .map(|e| e == "luau" || e == "lua")
+            .unwrap_or(false)
+        {
             // Script file
             let (script_name, class_name) = parse_script_name(&entry_name);
             if let Ok(source) = std::fs::read_to_string(&entry_path) {
@@ -2191,7 +2803,11 @@ fn build_dom_children(
             let child_ref = dom.insert(parent_ref, builder);
 
             build_dom_children(dom, child_ref, &entry_path)?;
-        } else if entry_path.extension().map(|e| e == "rbxjson").unwrap_or(false) {
+        } else if entry_path
+            .extension()
+            .map(|e| e == "rbxjson")
+            .unwrap_or(false)
+        {
             // .rbxjson file
             let instance_name = entry_path
                 .file_stem()
@@ -2218,7 +2834,11 @@ fn build_dom_children(
                     dom.insert(parent_ref, builder);
                 }
             }
-        } else if entry_path.extension().map(|e| e == "luau" || e == "lua").unwrap_or(false) {
+        } else if entry_path
+            .extension()
+            .map(|e| e == "luau" || e == "lua")
+            .unwrap_or(false)
+        {
             // Script file
             let (script_name, class_name) = parse_script_name(&entry_name);
             if let Ok(source) = std::fs::read_to_string(&entry_path) {
@@ -2310,9 +2930,11 @@ fn json_to_variant(value: &serde_json::Value) -> Option<Variant> {
                         v.get("b")?.as_u64()? as u8,
                     )))
                 }
-                "BrickColor" => {
-                    val?.as_u64().map(|n| Variant::BrickColor(BrickColor::from_number(n as u16).unwrap_or(BrickColor::MediumStoneGrey)))
-                }
+                "BrickColor" => val?.as_u64().map(|n| {
+                    Variant::BrickColor(
+                        BrickColor::from_number(n as u16).unwrap_or(BrickColor::MediumStoneGrey),
+                    )
+                }),
 
                 // UDim types
                 "UDim" => {
@@ -2351,9 +2973,21 @@ fn json_to_variant(value: &serde_json::Value) -> Option<Variant> {
                                 pos[2].as_f64()? as f32,
                             ),
                             Matrix3::new(
-                                Vector3::new(rot[0].as_f64()? as f32, rot[1].as_f64()? as f32, rot[2].as_f64()? as f32),
-                                Vector3::new(rot[3].as_f64()? as f32, rot[4].as_f64()? as f32, rot[5].as_f64()? as f32),
-                                Vector3::new(rot[6].as_f64()? as f32, rot[7].as_f64()? as f32, rot[8].as_f64()? as f32),
+                                Vector3::new(
+                                    rot[0].as_f64()? as f32,
+                                    rot[1].as_f64()? as f32,
+                                    rot[2].as_f64()? as f32,
+                                ),
+                                Vector3::new(
+                                    rot[3].as_f64()? as f32,
+                                    rot[4].as_f64()? as f32,
+                                    rot[5].as_f64()? as f32,
+                                ),
+                                Vector3::new(
+                                    rot[6].as_f64()? as f32,
+                                    rot[7].as_f64()? as f32,
+                                    rot[8].as_f64()? as f32,
+                                ),
                             ),
                         )))
                     } else {
@@ -2381,8 +3015,14 @@ fn json_to_variant(value: &serde_json::Value) -> Option<Variant> {
                     let min = v.get("min")?.as_object()?;
                     let max = v.get("max")?.as_object()?;
                     Some(Variant::Rect(Rect::new(
-                        Vector2::new(min.get("x")?.as_f64()? as f32, min.get("y")?.as_f64()? as f32),
-                        Vector2::new(max.get("x")?.as_f64()? as f32, max.get("y")?.as_f64()? as f32),
+                        Vector2::new(
+                            min.get("x")?.as_f64()? as f32,
+                            min.get("y")?.as_f64()? as f32,
+                        ),
+                        Vector2::new(
+                            max.get("x")?.as_f64()? as f32,
+                            max.get("y")?.as_f64()? as f32,
+                        ),
                     )))
                 }
 
@@ -2404,15 +3044,19 @@ fn json_to_variant(value: &serde_json::Value) -> Option<Variant> {
                     Some(Variant::Font(Font {
                         family,
                         weight: FontWeight::from_u16(weight).unwrap_or(FontWeight::Regular),
-                        style: if style == "Italic" { FontStyle::Italic } else { FontStyle::Normal },
+                        style: if style == "Italic" {
+                            FontStyle::Italic
+                        } else {
+                            FontStyle::Normal
+                        },
                         cached_face_id: None,
                     }))
                 }
 
                 // Content (asset URLs)
-                "Content" => {
-                    val?.as_str().map(|s| Variant::Content(Content::from(s.to_string())))
-                }
+                "Content" => val?
+                    .as_str()
+                    .map(|s| Variant::Content(Content::from(s.to_string()))),
 
                 // Refs - we skip these as they need special handling
                 "Ref" => None,
@@ -2626,20 +3270,25 @@ async fn download_plugin_from_github() -> Result<PathBuf> {
         bail!("GitHub API returned status: {}", response.status());
     }
 
-    let release: serde_json::Value = response.json().await
+    let release: serde_json::Value = response
+        .json()
+        .await
         .context("Failed to parse release info")?;
 
-    let version = release.get("tag_name")
+    let version = release
+        .get("tag_name")
         .and_then(|t| t.as_str())
         .unwrap_or("unknown");
     println!("{}", version);
 
     // Find plugin download URL
-    let assets = release.get("assets")
+    let assets = release
+        .get("assets")
         .and_then(|a| a.as_array())
         .context("Could not find assets in release")?;
 
-    let plugin_url = assets.iter()
+    let plugin_url = assets
+        .iter()
         .find(|a| a.get("name").and_then(|n| n.as_str()) == Some("RbxSync.rbxm"))
         .and_then(|a| a.get("browser_download_url"))
         .and_then(|u| u.as_str())
@@ -2699,10 +3348,13 @@ async fn cmd_update(from_source: bool, vscode: bool, yes: bool) -> Result<()> {
         bail!("GitHub API returned status: {}", response.status());
     }
 
-    let release: serde_json::Value = response.json().await
+    let release: serde_json::Value = response
+        .json()
+        .await
         .context("Failed to parse GitHub release response")?;
 
-    let latest_version = release.get("tag_name")
+    let latest_version = release
+        .get("tag_name")
         .and_then(|t| t.as_str())
         .map(|s| s.trim_start_matches('v'))
         .context("Could not find version tag in release")?;
@@ -2716,17 +3368,23 @@ async fn cmd_update(from_source: bool, vscode: bool, yes: bool) -> Result<()> {
     println!();
 
     // Find download URLs for CLI and plugin
-    let assets = release.get("assets")
+    let assets = release
+        .get("assets")
         .and_then(|a| a.as_array())
         .context("Could not find assets in release")?;
 
-    let cli_url = assets.iter()
+    let cli_url = assets
+        .iter()
         .find(|a| a.get("name").and_then(|n| n.as_str()) == Some(platform_asset))
         .and_then(|a| a.get("browser_download_url"))
         .and_then(|u| u.as_str())
-        .context(format!("Could not find {} in release assets", platform_asset))?;
+        .context(format!(
+            "Could not find {} in release assets",
+            platform_asset
+        ))?;
 
-    let plugin_url = assets.iter()
+    let plugin_url = assets
+        .iter()
         .find(|a| a.get("name").and_then(|n| n.as_str()) == Some("RbxSync.rbxm"))
         .and_then(|a| a.get("browser_download_url"))
         .and_then(|u| u.as_str())
@@ -2763,7 +3421,8 @@ async fn cmd_update(from_source: bool, vscode: bool, yes: bool) -> Result<()> {
     println!();
     println!("1. Downloading CLI...");
     let cli_path = download_dir.join(platform_asset);
-    download_file(&client, cli_url, &cli_path).await
+    download_file(&client, cli_url, &cli_path)
+        .await
         .context("Failed to download CLI")?;
     println!("   Downloaded!");
 
@@ -2781,14 +3440,22 @@ async fn cmd_update(from_source: bool, vscode: bool, yes: bool) -> Result<()> {
         // Try to copy directly, fall back to sudo
         if std::fs::copy(&cli_path, &current_exe).is_err() {
             let status = std::process::Command::new("sudo")
-                .args(["cp", cli_path.to_str().unwrap(), current_exe.to_str().unwrap()])
+                .args([
+                    "cp",
+                    cli_path.to_str().unwrap(),
+                    current_exe.to_str().unwrap(),
+                ])
                 .status();
 
             match status {
                 Ok(s) if s.success() => println!("   Installed!"),
                 _ => {
                     println!("   Could not auto-install. Run manually:");
-                    println!("   sudo cp {} {}", cli_path.display(), current_exe.display());
+                    println!(
+                        "   sudo cp {} {}",
+                        cli_path.display(),
+                        current_exe.display()
+                    );
                 }
             }
         } else {
@@ -2830,7 +3497,8 @@ del "%~f0"
     // Step 2: Download and install plugin
     println!("2. Downloading Studio plugin...");
     let plugin_path = download_dir.join("RbxSync.rbxm");
-    download_file(&client, plugin_url, &plugin_path).await
+    download_file(&client, plugin_url, &plugin_path)
+        .await
         .context("Failed to download plugin")?;
     println!("   Downloaded!");
 
@@ -2843,20 +3511,23 @@ del "%~f0"
         println!("3. Downloading VS Code extension...");
 
         // Find .vsix file in assets
-        let vsix_asset = assets.iter()
-            .find(|a| {
-                a.get("name")
-                    .and_then(|n| n.as_str())
-                    .map(|n| n.ends_with(".vsix"))
-                    .unwrap_or(false)
-            });
+        let vsix_asset = assets.iter().find(|a| {
+            a.get("name")
+                .and_then(|n| n.as_str())
+                .map(|n| n.ends_with(".vsix"))
+                .unwrap_or(false)
+        });
 
         if let Some(asset) = vsix_asset {
             let vsix_name = asset.get("name").and_then(|n| n.as_str()).unwrap();
-            let vsix_url = asset.get("browser_download_url").and_then(|u| u.as_str()).unwrap();
+            let vsix_url = asset
+                .get("browser_download_url")
+                .and_then(|u| u.as_str())
+                .unwrap();
             let vsix_path = download_dir.join(vsix_name);
 
-            download_file(&client, vsix_url, &vsix_path).await
+            download_file(&client, vsix_url, &vsix_path)
+                .await
                 .context("Failed to download VS Code extension")?;
             println!("   Downloaded!");
 
@@ -2923,7 +3594,11 @@ fn cmd_update_from_source(vscode: bool) -> Result<()> {
                     .context("Failed to create ~/.rbxsync directory")?;
 
                 let status = std::process::Command::new("git")
-                    .args(["clone", "https://github.com/Smokestack-Games/rbxsync.git", managed_repo.to_str().unwrap()])
+                    .args([
+                        "clone",
+                        "https://github.com/Smokestack-Games/rbxsync.git",
+                        managed_repo.to_str().unwrap(),
+                    ])
                     .status()
                     .context("Failed to clone repository")?;
 
@@ -2974,12 +3649,20 @@ fn cmd_update_from_source(vscode: bool) -> Result<()> {
         {
             if std::fs::copy(&new_binary, &current_exe).is_err() {
                 let status = std::process::Command::new("sudo")
-                    .args(["cp", new_binary.to_str().unwrap(), current_exe.to_str().unwrap()])
+                    .args([
+                        "cp",
+                        new_binary.to_str().unwrap(),
+                        current_exe.to_str().unwrap(),
+                    ])
                     .status();
 
                 match status {
                     Ok(s) if s.success() => println!("   Installed!"),
-                    _ => println!("   Run: sudo cp {} {}", new_binary.display(), current_exe.display()),
+                    _ => println!(
+                        "   Run: sudo cp {} {}",
+                        new_binary.display(),
+                        current_exe.display()
+                    ),
                 }
             } else {
                 println!("   Installed!");
@@ -2989,7 +3672,11 @@ fn cmd_update_from_source(vscode: bool) -> Result<()> {
         #[cfg(windows)]
         {
             if std::fs::copy(&new_binary, &current_exe).is_err() {
-                println!("   Run as Admin: copy {} {}", new_binary.display(), current_exe.display());
+                println!(
+                    "   Run as Admin: copy {} {}",
+                    new_binary.display(),
+                    current_exe.display()
+                );
             } else {
                 println!("   Installed!");
             }
@@ -3057,8 +3744,12 @@ fn is_newer_version(latest: &str, current: &str) -> bool {
     };
     let (l_maj, l_min, l_pat) = parse(latest);
     let (c_maj, c_min, c_pat) = parse(current);
-    if l_maj != c_maj { return l_maj > c_maj; }
-    if l_min != c_min { return l_min > c_min; }
+    if l_maj != c_maj {
+        return l_maj > c_maj;
+    }
+    if l_min != c_min {
+        return l_min > c_min;
+    }
     l_pat > c_pat
 }
 
@@ -3171,7 +3862,11 @@ fn find_rbxsync_binaries() -> Vec<(PathBuf, Option<std::time::SystemTime>)> {
     let extra_locations = {
         let mut locs = vec![home.join(".cargo/bin/rbxsync.exe")];
         if let Ok(local_app_data) = std::env::var("LOCALAPPDATA") {
-            locs.push(PathBuf::from(local_app_data).join("rbxsync").join("rbxsync.exe"));
+            locs.push(
+                PathBuf::from(local_app_data)
+                    .join("rbxsync")
+                    .join("rbxsync.exe"),
+            );
         }
         if let Ok(app_data) = std::env::var("APPDATA") {
             locs.push(PathBuf::from(app_data).join("rbxsync").join("rbxsync.exe"));
@@ -3200,7 +3895,9 @@ fn warn_duplicate_binaries() -> Vec<(PathBuf, Option<std::time::SystemTime>)> {
     let binaries = find_rbxsync_binaries();
     if binaries.len() > 1 {
         eprintln!("\x1b[33m⚠  Warning: Multiple rbxsync binaries found:\x1b[0m");
-        let current_exe = std::env::current_exe().ok().and_then(|p| p.canonicalize().ok());
+        let current_exe = std::env::current_exe()
+            .ok()
+            .and_then(|p| p.canonicalize().ok());
         for (path, mtime) in &binaries {
             let age = mtime
                 .and_then(|t| t.elapsed().ok())
@@ -3214,7 +3911,11 @@ fn warn_duplicate_binaries() -> Vec<(PathBuf, Option<std::time::SystemTime>)> {
                     }
                 })
                 .unwrap_or_else(|| "unknown age".to_string());
-            let marker = if current_exe.as_ref() == Some(path) { " (active)" } else { "" };
+            let marker = if current_exe.as_ref() == Some(path) {
+                " (active)"
+            } else {
+                ""
+            };
             eprintln!("   {} ({}){}", path.display(), age, marker);
         }
         eprintln!();
@@ -3244,8 +3945,13 @@ fn cmd_doctor() -> Result<()> {
     // 2. Check for duplicate binaries
     let binaries = find_rbxsync_binaries();
     if binaries.len() > 1 {
-        println!("\x1b[33m⚠\x1b[0m Found {} rbxsync installations:", binaries.len());
-        let current_exe = std::env::current_exe().ok().and_then(|p| p.canonicalize().ok());
+        println!(
+            "\x1b[33m⚠\x1b[0m Found {} rbxsync installations:",
+            binaries.len()
+        );
+        let current_exe = std::env::current_exe()
+            .ok()
+            .and_then(|p| p.canonicalize().ok());
         for (path, mtime) in &binaries {
             let age = mtime
                 .and_then(|t| t.elapsed().ok())
@@ -3257,7 +3963,11 @@ fn cmd_doctor() -> Result<()> {
                     }
                 })
                 .unwrap_or_else(|| "unknown".to_string());
-            let marker = if current_exe.as_ref() == Some(path) { " ← active" } else { "" };
+            let marker = if current_exe.as_ref() == Some(path) {
+                " ← active"
+            } else {
+                ""
+            };
             let remove_cmd = if path.starts_with("/usr/local") {
                 format!("sudo rm {}", path.display())
             } else {
@@ -3422,10 +4132,14 @@ fn cmd_uninstall(vscode: bool, keep_repo: bool, yes: bool) -> Result<()> {
                 println!("Removed VS Code extension: {}", vscode_extension_id);
             }
             Ok(_) => {
-                errors.push("VS Code extension uninstall failed (may not be installed)".to_string());
+                errors
+                    .push("VS Code extension uninstall failed (may not be installed)".to_string());
             }
             Err(e) => {
-                errors.push(format!("Could not run 'code' command: {}. Uninstall manually from VS Code.", e));
+                errors.push(format!(
+                    "Could not run 'code' command: {}. Uninstall manually from VS Code.",
+                    e
+                ));
             }
         }
     }
@@ -3565,8 +4279,8 @@ fn cmd_migrate(from: String, path: Option<PathBuf>, force: bool) -> Result<()> {
             }
 
             // Determine source directory from Rojo config
-            let source_dir = rbxsync_core::rojo::get_source_dir(&rojo)
-                .unwrap_or_else(|| "src".to_string());
+            let source_dir =
+                rbxsync_core::rojo::get_source_dir(&rojo).unwrap_or_else(|| "src".to_string());
 
             // Create RbxSync config
             let rbxsync_config = ProjectConfig {
@@ -3616,7 +4330,12 @@ async fn cmd_harness(action: HarnessAction) -> Result<()> {
     let client = reqwest::Client::new();
 
     // Check server is running
-    if client.get("http://localhost:44755/health").send().await.is_err() {
+    if client
+        .get("http://localhost:44755/health")
+        .send()
+        .await
+        .is_err()
+    {
         println!("RbxSync server is not running. Start it with: rbxsync serve");
         return Ok(());
     }
@@ -3655,7 +4374,11 @@ async fn cmd_harness(action: HarnessAction) -> Result<()> {
                 .context("Failed to initialize harness")?;
 
             let result: serde_json::Value = response.json().await?;
-            if result.get("success").and_then(|v| v.as_bool()).unwrap_or(false) {
+            if result
+                .get("success")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false)
+            {
                 let harness_dir = result
                     .get("harnessDir")
                     .and_then(|v| v.as_str())
@@ -3694,7 +4417,11 @@ async fn cmd_harness(action: HarnessAction) -> Result<()> {
 
             let result: serde_json::Value = response.json().await?;
 
-            if !result.get("initialized").and_then(|v| v.as_bool()).unwrap_or(false) {
+            if !result
+                .get("initialized")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false)
+            {
                 println!("Harness not initialized for this project.");
                 println!("Run: rbxsync harness init --name 'Your Game'");
                 return Ok(());
@@ -3702,7 +4429,12 @@ async fn cmd_harness(action: HarnessAction) -> Result<()> {
 
             // Print game info
             if let Some(game) = result.get("game") {
-                println!("Game: {}", game.get("name").and_then(|v| v.as_str()).unwrap_or("Unknown"));
+                println!(
+                    "Game: {}",
+                    game.get("name")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("Unknown")
+                );
                 if let Some(genre) = game.get("genre").and_then(|v| v.as_str()) {
                     println!("Genre: {}", genre);
                 }
@@ -3719,8 +4451,14 @@ async fn cmd_harness(action: HarnessAction) -> Result<()> {
                 println!("Features:");
                 let total = summary.get("total").and_then(|v| v.as_u64()).unwrap_or(0);
                 let planned = summary.get("planned").and_then(|v| v.as_u64()).unwrap_or(0);
-                let in_progress = summary.get("inProgress").and_then(|v| v.as_u64()).unwrap_or(0);
-                let completed = summary.get("completed").and_then(|v| v.as_u64()).unwrap_or(0);
+                let in_progress = summary
+                    .get("inProgress")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0);
+                let completed = summary
+                    .get("completed")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0);
                 let blocked = summary.get("blocked").and_then(|v| v.as_u64()).unwrap_or(0);
 
                 println!("  Total: {}", total);
@@ -3744,10 +4482,20 @@ async fn cmd_harness(action: HarnessAction) -> Result<()> {
                 if !sessions.is_empty() {
                     println!("Recent Sessions:");
                     for session in sessions.iter().take(3) {
-                        let id = session.get("id").and_then(|v| v.as_str()).unwrap_or("unknown");
-                        let started = session.get("startedAt").and_then(|v| v.as_str()).unwrap_or("unknown");
+                        let id = session
+                            .get("id")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("unknown");
+                        let started = session
+                            .get("startedAt")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("unknown");
                         let ended = session.get("endedAt").and_then(|v| v.as_str());
-                        let status = if ended.is_some() { "completed" } else { "active" };
+                        let status = if ended.is_some() {
+                            "completed"
+                        } else {
+                            "active"
+                        };
                         println!("  {} ({}) - {}", &id[..8.min(id.len())], status, started);
                     }
                 }
@@ -3771,7 +4519,11 @@ async fn cmd_harness(action: HarnessAction) -> Result<()> {
 
             let result: serde_json::Value = response.json().await?;
 
-            if !result.get("initialized").and_then(|v| v.as_bool()).unwrap_or(false) {
+            if !result
+                .get("initialized")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false)
+            {
                 println!("Harness not initialized for this project.");
                 return Ok(());
             }
@@ -3808,8 +4560,14 @@ async fn cmd_harness(action: HarnessAction) -> Result<()> {
                         }
                     }
 
-                    let id = feature.get("id").and_then(|v| v.as_str()).unwrap_or("unknown");
-                    let name = feature.get("name").and_then(|v| v.as_str()).unwrap_or("Unnamed");
+                    let id = feature
+                        .get("id")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("unknown");
+                    let name = feature
+                        .get("name")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("Unnamed");
                     let priority = feature
                         .get("priority")
                         .and_then(|v| v.as_str())
@@ -3883,7 +4641,11 @@ async fn cmd_harness(action: HarnessAction) -> Result<()> {
                 .context("Failed to update feature")?;
 
             let result: serde_json::Value = response.json().await?;
-            if result.get("success").and_then(|v| v.as_bool()).unwrap_or(false) {
+            if result
+                .get("success")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false)
+            {
                 let feature_id = result
                     .get("featureId")
                     .and_then(|v| v.as_str())
@@ -3927,7 +4689,11 @@ async fn cmd_harness(action: HarnessAction) -> Result<()> {
                     .context("Failed to start session")?;
 
                 let result: serde_json::Value = response.json().await?;
-                if result.get("success").and_then(|v| v.as_bool()).unwrap_or(false) {
+                if result
+                    .get("success")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false)
+                {
                     let session_id = result
                         .get("sessionId")
                         .and_then(|v| v.as_str())
@@ -3981,7 +4747,11 @@ async fn cmd_harness(action: HarnessAction) -> Result<()> {
                     .context("Failed to end session")?;
 
                 let result: serde_json::Value = response.json().await?;
-                if result.get("success").and_then(|v| v.as_bool()).unwrap_or(false) {
+                if result
+                    .get("success")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false)
+                {
                     println!("Session ended successfully!");
                 } else {
                     let error = result

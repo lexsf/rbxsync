@@ -28,7 +28,11 @@ fn build_nested_tree(breadth: usize, depth: usize) -> Instance {
         let mut instance = Instance::new("Folder", name);
         if remaining_depth > 0 {
             for i in 0..breadth {
-                instance.add_child(build_level(&format!("{}_child_{}", name, i), breadth, remaining_depth - 1));
+                instance.add_child(build_level(
+                    &format!("{}_child_{}", name, i),
+                    breadth,
+                    remaining_depth - 1,
+                ));
             }
         }
         instance
@@ -54,25 +58,40 @@ fn clone_tree(root: &Instance) -> Instance {
 }
 
 fn bench_build_flat_tree() -> BenchmarkResult {
-    run_benchmark("Build flat tree (1000 children)", CATEGORY, ITERATIONS, || {
-        let tree = build_flat_tree(1000);
-        std::hint::black_box(tree);
-    })
+    run_benchmark(
+        "Build flat tree (1000 children)",
+        CATEGORY,
+        ITERATIONS,
+        || {
+            let tree = build_flat_tree(1000);
+            std::hint::black_box(tree);
+        },
+    )
 }
 
 fn bench_build_nested_tree() -> BenchmarkResult {
-    run_benchmark("Build nested tree (5x4 = 625 nodes)", CATEGORY, ITERATIONS, || {
-        let tree = build_nested_tree(5, 4);
-        std::hint::black_box(tree);
-    })
+    run_benchmark(
+        "Build nested tree (5x4 = 625 nodes)",
+        CATEGORY,
+        ITERATIONS,
+        || {
+            let tree = build_nested_tree(5, 4);
+            std::hint::black_box(tree);
+        },
+    )
 }
 
 fn bench_traverse_tree() -> BenchmarkResult {
     let tree = build_nested_tree(5, 4);
-    run_benchmark("Traverse tree DFS (~625 nodes)", CATEGORY, ITERATIONS, || {
-        let count = traverse_dfs(&tree);
-        std::hint::black_box(count);
-    })
+    run_benchmark(
+        "Traverse tree DFS (~625 nodes)",
+        CATEGORY,
+        ITERATIONS,
+        || {
+            let count = traverse_dfs(&tree);
+            std::hint::black_box(count);
+        },
+    )
 }
 
 fn bench_clone_tree() -> BenchmarkResult {

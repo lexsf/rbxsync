@@ -383,7 +383,11 @@ mod tests {
 
     #[test]
     fn test_vector3_serialization() {
-        let v = PropertyValue::Vector3(Vector3 { x: 1.0, y: 2.0, z: 3.0 });
+        let v = PropertyValue::Vector3(Vector3 {
+            x: 1.0,
+            y: 2.0,
+            z: 3.0,
+        });
         let json = serde_json::to_string(&v).unwrap();
         assert!(json.contains("Vector3"));
 

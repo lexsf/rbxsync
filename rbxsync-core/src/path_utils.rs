@@ -49,7 +49,10 @@ mod tests {
         assert_eq!(normalize_path("foo\\bar\\baz"), "foo/bar/baz");
         assert_eq!(normalize_path("foo/bar/baz"), "foo/bar/baz");
         assert_eq!(normalize_path(""), "");
-        assert_eq!(normalize_path("C:\\Users\\test\\project"), "C:/Users/test/project");
+        assert_eq!(
+            normalize_path("C:\\Users\\test\\project"),
+            "C:/Users/test/project"
+        );
     }
 
     #[test]
@@ -57,7 +60,11 @@ mod tests {
         let path = PathBuf::from("ServerScriptService").join("MyScript");
         let result = path_to_string(&path);
         assert!(!result.contains('\\'));
-        assert!(result.contains('/') || result == "ServerScriptService/MyScript" || result.ends_with("MyScript"));
+        assert!(
+            result.contains('/')
+                || result == "ServerScriptService/MyScript"
+                || result.ends_with("MyScript")
+        );
     }
 
     #[test]

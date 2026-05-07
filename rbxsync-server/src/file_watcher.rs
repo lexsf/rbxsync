@@ -8,8 +8,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use notify::event::{DataChange, ModifyKind, RenameMode};
 use notify::{Config, Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
-use notify::event::{ModifyKind, DataChange, RenameMode};
 use tokio::sync::{mpsc, RwLock};
 
 use rbxsync_core::is_package_path;
@@ -123,15 +123,19 @@ pub async fn start_file_watcher(
                 ext == "luau" || ext == "rbxjson"
             } else {
                 // For deletions and renames, also handle directories (no extension)
-                let is_delete_like = matches!(kind, FileChangeKind::Delete | FileChangeKind::Rename { .. });
+                let is_delete_like =
+                    matches!(kind, FileChangeKind::Delete | FileChangeKind::Rename { .. });
                 if is_delete_like {
-                    let is_inside_src = path.strip_prefix(&src_dir)
+                    let is_inside_src = path
+                        .strip_prefix(&src_dir)
                         .map(|rel| !rel.as_os_str().is_empty())
                         .unwrap_or(false);
-                    is_inside_src && path.file_name()
-                        .and_then(|n| n.to_str())
-                        .map(|n| !n.contains('.'))
-                        .unwrap_or(false)
+                    is_inside_src
+                        && path
+                            .file_name()
+                            .and_then(|n| n.to_str())
+                            .map(|n| !n.contains('.'))
+                            .unwrap_or(false)
                 } else {
                     false
                 }
@@ -147,7 +151,10 @@ pub async fn start_file_watcher(
                     let path = from_path.clone();
                     if should_process_path(&path, &kind) {
                         if !sync_packages && is_package_path(&path) {
-                            tracing::trace!("Skipping package path (sync_packages=false): {:?}", path);
+                            tracing::trace!(
+                                "Skipping package path (sync_packages=false): {:?}",
+                                path
+                            );
                         } else {
                             let change = FileChange {
                                 path,
@@ -174,15 +181,25 @@ pub async fn start_file_watcher(
                         if event.paths.len() == 2 {
                             let from_path = event.paths[0].clone();
                             let to_path = event.paths[1].clone();
-                            let kind = FileChangeKind::Rename { from_path: from_path.clone() };
+                            let kind = FileChangeKind::Rename {
+                                from_path: from_path.clone(),
+                            };
 
                             // Skip package paths unless sync_packages is enabled
-                            if !sync_packages && (is_package_path(&to_path) || is_package_path(&from_path)) {
-                                tracing::trace!("Skipping package rename (sync_packages=false): {:?} -> {:?}", from_path, to_path);
+                            if !sync_packages
+                                && (is_package_path(&to_path) || is_package_path(&from_path))
+                            {
+                                tracing::trace!(
+                                    "Skipping package rename (sync_packages=false): {:?} -> {:?}",
+                                    from_path,
+                                    to_path
+                                );
                                 continue;
                             }
 
-                            if should_process_path(&to_path, &kind) || should_process_path(&from_path, &FileChangeKind::Delete) {
+                            if should_process_path(&to_path, &kind)
+                                || should_process_path(&from_path, &FileChangeKind::Delete)
+                            {
                                 let change = FileChange {
                                     path: to_path,
                                     project_dir: project_dir_clone.clone(),
@@ -222,29 +239,39 @@ pub async fn start_file_watcher(
                                         match rename_mode {
                                             RenameMode::From => {
                                                 // Buffer the From path; don't emit yet
-                                                pending_rename_from = Some((path.clone(), Instant::now()));
+                                                pending_rename_from =
+                                                    Some((path.clone(), Instant::now()));
                                                 None
                                             }
                                             RenameMode::To => {
                                                 // Check for a buffered From within 100ms
-                                                if let Some((from_path, timestamp)) = pending_rename_from.take() {
-                                                    if timestamp.elapsed() <= Duration::from_millis(100) {
+                                                if let Some((from_path, timestamp)) =
+                                                    pending_rename_from.take()
+                                                {
+                                                    if timestamp.elapsed()
+                                                        <= Duration::from_millis(100)
+                                                    {
                                                         Some(FileChangeKind::Rename { from_path })
                                                     } else {
                                                         // Stale From - flush as Delete, then handle To
                                                         let delete_kind = FileChangeKind::Delete;
-                                                        if should_process_path(&from_path, &delete_kind)
-                                                            && (sync_packages || !is_package_path(&from_path))
+                                                        if should_process_path(
+                                                            &from_path,
+                                                            &delete_kind,
+                                                        ) && (sync_packages
+                                                            || !is_package_path(&from_path))
                                                         {
                                                             let change = FileChange {
                                                                 path: from_path,
-                                                                project_dir: project_dir_clone.clone(),
+                                                                project_dir: project_dir_clone
+                                                                    .clone(),
                                                                 kind: delete_kind,
                                                             };
                                                             let state = state_clone.clone();
                                                             rt.spawn(async move {
                                                                 let state = state.read().await;
-                                                                let _ = state.change_tx.send(change);
+                                                                let _ =
+                                                                    state.change_tx.send(change);
                                                             });
                                                         }
                                                         // Treat To as Create
@@ -332,7 +359,9 @@ pub async fn start_file_watcher(
                                 if let Ok(entries) = std::fs::read_dir(&path) {
                                     for entry in entries.flatten() {
                                         let entry_path = entry.path();
-                                        if let Some(ext) = entry_path.extension().and_then(|e| e.to_str()) {
+                                        if let Some(ext) =
+                                            entry_path.extension().and_then(|e| e.to_str())
+                                        {
                                             if ext == "luau" || ext == "rbxjson" {
                                                 let change = FileChange {
                                                     path: entry_path,
@@ -353,7 +382,10 @@ pub async fn start_file_watcher(
 
                             // Skip package paths unless sync_packages is enabled
                             if !sync_packages && is_package_path(&path) {
-                                tracing::trace!("Skipping package path (sync_packages=false): {:?}", path);
+                                tracing::trace!(
+                                    "Skipping package path (sync_packages=false): {:?}",
+                                    path
+                                );
                                 continue;
                             }
 
@@ -390,9 +422,7 @@ pub async fn start_file_watcher(
 }
 
 /// Process a file change and prepare sync operation
-pub fn process_file_change(
-    change: &FileChange,
-) -> Option<serde_json::Value> {
+pub fn process_file_change(change: &FileChange) -> Option<serde_json::Value> {
     let path = &change.path;
     let project_dir = PathBuf::from(&change.project_dir);
     let src_dir = project_dir.join("src");
@@ -503,11 +533,17 @@ pub fn process_file_change(
 
                 // Ensure path is set from file location (used for tracking, not naming)
                 if let Some(obj) = data.as_object_mut() {
-                    obj.insert("path".to_string(), serde_json::Value::String(inst_path.clone()));
+                    obj.insert(
+                        "path".to_string(),
+                        serde_json::Value::String(inst_path.clone()),
+                    );
                     // If no name provided, derive from path
                     if !obj.contains_key("name") {
                         if let Some(name) = inst_path.rsplit('/').next() {
-                            obj.insert("name".to_string(), serde_json::Value::String(name.to_string()));
+                            obj.insert(
+                                "name".to_string(),
+                                serde_json::Value::String(name.to_string()),
+                            );
                         }
                     }
                 }

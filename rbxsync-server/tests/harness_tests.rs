@@ -47,9 +47,18 @@ mod harness_init {
         // Verify directory structure was created
         let harness_dir = temp_dir.path().join(".rbxsync/harness");
         assert!(harness_dir.exists(), "Harness directory should be created");
-        assert!(harness_dir.join("game.yaml").exists(), "game.yaml should be created");
-        assert!(harness_dir.join("features.yaml").exists(), "features.yaml should be created");
-        assert!(harness_dir.join("sessions").exists(), "sessions directory should be created");
+        assert!(
+            harness_dir.join("game.yaml").exists(),
+            "game.yaml should be created"
+        );
+        assert!(
+            harness_dir.join("features.yaml").exists(),
+            "features.yaml should be created"
+        );
+        assert!(
+            harness_dir.join("sessions").exists(),
+            "sessions directory should be created"
+        );
     }
 
     #[tokio::test]
@@ -72,7 +81,10 @@ mod harness_init {
         let body: serde_json::Value = response.json();
         assert!(body["success"].as_bool().unwrap());
         assert_eq!(body["templateApplied"].as_str(), Some("tycoon"));
-        assert!(body["featuresAdded"].as_u64().unwrap() > 0, "Template should add features");
+        assert!(
+            body["featuresAdded"].as_u64().unwrap() > 0,
+            "Template should add features"
+        );
     }
 
     #[tokio::test]
@@ -94,7 +106,10 @@ mod harness_init {
 
         let body: serde_json::Value = response.json();
         assert!(!body["success"].as_bool().unwrap());
-        assert!(body["message"].as_str().unwrap().contains("Unknown template"));
+        assert!(body["message"]
+            .as_str()
+            .unwrap()
+            .contains("Unknown template"));
     }
 
     #[tokio::test]
@@ -118,7 +133,11 @@ mod harness_init {
             response.assert_status_ok();
 
             let body: serde_json::Value = response.json();
-            assert!(body["success"].as_bool().unwrap(), "Template '{}' should work", template);
+            assert!(
+                body["success"].as_bool().unwrap(),
+                "Template '{}' should work",
+                template
+            );
             assert_eq!(body["templateApplied"].as_str(), Some(template));
         }
     }
@@ -145,7 +164,10 @@ mod session_workflow {
 
         let body: serde_json::Value = response.json();
         assert!(!body["success"].as_bool().unwrap());
-        assert!(body["message"].as_str().unwrap().contains("not initialized"));
+        assert!(body["message"]
+            .as_str()
+            .unwrap()
+            .contains("not initialized"));
     }
 
     #[tokio::test]
@@ -181,7 +203,8 @@ mod session_workflow {
         assert!(!session_id.is_empty());
 
         // Verify session file was created
-        let session_file = temp_dir.path()
+        let session_file = temp_dir
+            .path()
             .join(".rbxsync/harness/sessions")
             .join(format!("{}.yaml", session_id));
         assert!(session_file.exists(), "Session file should be created");
@@ -361,7 +384,10 @@ mod feature_management {
 
         let body: serde_json::Value = response.json();
         assert!(!body["success"].as_bool().unwrap());
-        assert!(body["message"].as_str().unwrap().contains("Name is required"));
+        assert!(body["message"]
+            .as_str()
+            .unwrap()
+            .contains("Name is required"));
     }
 
     #[tokio::test]

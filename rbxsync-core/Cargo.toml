@@ -11,11 +11,16 @@ toml = { workspace = true }
 uuid = { workspace = true }
 thiserror = { workspace = true }
 anyhow = { workspace = true }
+base64 = { workspace = true }
 flate2 = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+futures = "0.3"
 
 # Roblox binary format
 rbx_binary = { workspace = true }
 rbx_dom_weak = { workspace = true }
+rbx_xml = { workspace = true }
 rbx_types = { workspace = true }
 
 # Platform utilities

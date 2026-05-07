@@ -24,12 +24,18 @@ fn bench_write_small_files() -> BenchmarkResult {
     let content = generate_lua_content(1024);
     let bytes = content.len() as u64;
 
-    run_benchmark_with_throughput("Write small file (1KB)", CATEGORY, ITERATIONS, bytes, || {
-        let path = temp_dir.path().join("test.luau");
-        let mut file = fs::File::create(&path).unwrap();
-        file.write_all(content.as_bytes()).unwrap();
-        file.sync_all().unwrap();
-    })
+    run_benchmark_with_throughput(
+        "Write small file (1KB)",
+        CATEGORY,
+        ITERATIONS,
+        bytes,
+        || {
+            let path = temp_dir.path().join("test.luau");
+            let mut file = fs::File::create(&path).unwrap();
+            file.write_all(content.as_bytes()).unwrap();
+            file.sync_all().unwrap();
+        },
+    )
 }
 
 fn bench_read_small_files() -> BenchmarkResult {
@@ -52,12 +58,18 @@ fn bench_write_medium_files() -> BenchmarkResult {
     let content = generate_lua_content(10 * 1024);
     let bytes = content.len() as u64;
 
-    run_benchmark_with_throughput("Write medium file (10KB)", CATEGORY, ITERATIONS, bytes, || {
-        let path = temp_dir.path().join("test.luau");
-        let mut file = fs::File::create(&path).unwrap();
-        file.write_all(content.as_bytes()).unwrap();
-        file.sync_all().unwrap();
-    })
+    run_benchmark_with_throughput(
+        "Write medium file (10KB)",
+        CATEGORY,
+        ITERATIONS,
+        bytes,
+        || {
+            let path = temp_dir.path().join("test.luau");
+            let mut file = fs::File::create(&path).unwrap();
+            file.write_all(content.as_bytes()).unwrap();
+            file.sync_all().unwrap();
+        },
+    )
 }
 
 fn bench_read_medium_files() -> BenchmarkResult {
@@ -67,12 +79,18 @@ fn bench_read_medium_files() -> BenchmarkResult {
     fs::write(&path, &content).unwrap();
     let bytes = content.len() as u64;
 
-    run_benchmark_with_throughput("Read medium file (10KB)", CATEGORY, ITERATIONS, bytes, || {
-        let mut file = fs::File::open(&path).unwrap();
-        let mut buffer = String::new();
-        file.read_to_string(&mut buffer).unwrap();
-        std::hint::black_box(buffer);
-    })
+    run_benchmark_with_throughput(
+        "Read medium file (10KB)",
+        CATEGORY,
+        ITERATIONS,
+        bytes,
+        || {
+            let mut file = fs::File::open(&path).unwrap();
+            let mut buffer = String::new();
+            file.read_to_string(&mut buffer).unwrap();
+            std::hint::black_box(buffer);
+        },
+    )
 }
 
 fn bench_write_file_batch() -> BenchmarkResult {
@@ -82,22 +100,39 @@ fn bench_write_file_batch() -> BenchmarkResult {
         .collect();
     let total_bytes: u64 = files.iter().map(|(_, c)| c.len() as u64).sum();
 
-    run_benchmark_with_throughput("Write file batch (100 x 1KB)", CATEGORY, ITERATIONS / 5, total_bytes, || {
-        for (name, content) in &files {
-            let path = temp_dir.path().join(name);
-            fs::write(&path, content).unwrap();
-        }
-    })
+    run_benchmark_with_throughput(
+        "Write file batch (100 x 1KB)",
+        CATEGORY,
+        ITERATIONS / 5,
+        total_bytes,
+        || {
+            for (name, content) in &files {
+                let path = temp_dir.path().join(name);
+                fs::write(&path, content).unwrap();
+            }
+        },
+    )
 }
 
 fn bench_create_directory_tree() -> BenchmarkResult {
     let temp_dir = TempDir::new().unwrap();
 
-    run_benchmark("Create directory tree (5 levels)", CATEGORY, ITERATIONS, || {
-        let base = temp_dir.path().join(format!("tree_{}", rand::random::<u32>()));
-        let deep_path = base.join("ServerScriptService").join("Modules").join("Core").join("Utils");
-        fs::create_dir_all(&deep_path).unwrap();
-    })
+    run_benchmark(
+        "Create directory tree (5 levels)",
+        CATEGORY,
+        ITERATIONS,
+        || {
+            let base = temp_dir
+                .path()
+                .join(format!("tree_{}", rand::random::<u32>()));
+            let deep_path = base
+                .join("ServerScriptService")
+                .join("Modules")
+                .join("Core")
+                .join("Utils");
+            fs::create_dir_all(&deep_path).unwrap();
+        },
+    )
 }
 
 fn generate_lua_content(size: usize) -> String {

@@ -152,10 +152,7 @@ fn walk_tree(tree: &RojoTree, datamodel_path: &str, mapping: &mut HashMap<String
     if let Some(fs_path) = &tree.path {
         if !datamodel_path.is_empty() {
             // Normalize the path (remove leading ./ if present)
-            let normalized_path = fs_path
-                .strip_prefix("./")
-                .unwrap_or(fs_path)
-                .to_string();
+            let normalized_path = fs_path.strip_prefix("./").unwrap_or(fs_path).to_string();
             mapping.insert(datamodel_path.to_string(), normalized_path);
         }
     }
@@ -252,9 +249,18 @@ mod tests {
         let project: RojoProject = serde_json::from_str(json).unwrap();
         let mapping = rojo_to_tree_mapping(&project);
 
-        assert_eq!(mapping.get("ServerScriptService"), Some(&"src/server".to_string()));
-        assert_eq!(mapping.get("ReplicatedStorage"), Some(&"src/shared".to_string()));
-        assert_eq!(mapping.get("StarterPlayer/StarterPlayerScripts"), Some(&"src/client".to_string()));
+        assert_eq!(
+            mapping.get("ServerScriptService"),
+            Some(&"src/server".to_string())
+        );
+        assert_eq!(
+            mapping.get("ReplicatedStorage"),
+            Some(&"src/shared".to_string())
+        );
+        assert_eq!(
+            mapping.get("StarterPlayer/StarterPlayerScripts"),
+            Some(&"src/client".to_string())
+        );
     }
 
     #[test]
@@ -278,8 +284,14 @@ mod tests {
         let project: RojoProject = serde_json::from_str(json).unwrap();
         let mapping = rojo_to_tree_mapping(&project);
 
-        assert_eq!(mapping.get("ReplicatedStorage/Shared"), Some(&"src/shared".to_string()));
-        assert_eq!(mapping.get("ReplicatedStorage/Packages"), Some(&"Packages".to_string()));
+        assert_eq!(
+            mapping.get("ReplicatedStorage/Shared"),
+            Some(&"src/shared".to_string())
+        );
+        assert_eq!(
+            mapping.get("ReplicatedStorage/Packages"),
+            Some(&"Packages".to_string())
+        );
     }
 
     #[test]

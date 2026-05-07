@@ -29,11 +29,27 @@ fn extraction_benchmarks(c: &mut Criterion) {
     let mut group = c.benchmark_group("extraction");
 
     group.bench_function("build_small_game_tree", |b| {
-        b.iter(|| black_box(build_game_tree(&["ServerScriptService", "ReplicatedStorage"], 10)))
+        b.iter(|| {
+            black_box(build_game_tree(
+                &["ServerScriptService", "ReplicatedStorage"],
+                10,
+            ))
+        })
     });
 
     group.bench_function("build_large_game_tree", |b| {
-        b.iter(|| black_box(build_game_tree(&["ServerScriptService", "ReplicatedStorage", "ServerStorage", "StarterGui", "Workspace"], 50)))
+        b.iter(|| {
+            black_box(build_game_tree(
+                &[
+                    "ServerScriptService",
+                    "ReplicatedStorage",
+                    "ServerStorage",
+                    "StarterGui",
+                    "Workspace",
+                ],
+                50,
+            ))
+        })
     });
 
     let tree = build_game_tree(&["ServerScriptService", "ReplicatedStorage"], 20);

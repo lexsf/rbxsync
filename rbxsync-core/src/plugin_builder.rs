@@ -171,31 +171,30 @@ fn parse_script_file(path: &Path) -> Result<ScriptFile> {
     let source = fs::read_to_string(path).context("Failed to read script file")?;
 
     // Determine script type from filename
-    let (name, class_name, is_entry) = if file_name == "init.server.luau"
-        || file_name == "init.server.lua"
-    {
-        // Entry point - will become the root Script
-        ("init".to_string(), "Script".to_string(), true)
-    } else if file_name.ends_with(".server.luau") || file_name.ends_with(".server.lua") {
-        let name = file_name
-            .trim_end_matches(".server.luau")
-            .trim_end_matches(".server.lua")
-            .to_string();
-        (name, "Script".to_string(), false)
-    } else if file_name.ends_with(".client.luau") || file_name.ends_with(".client.lua") {
-        let name = file_name
-            .trim_end_matches(".client.luau")
-            .trim_end_matches(".client.lua")
-            .to_string();
-        (name, "LocalScript".to_string(), false)
-    } else {
-        // Regular .luau file -> ModuleScript
-        let name = file_name
-            .trim_end_matches(".luau")
-            .trim_end_matches(".lua")
-            .to_string();
-        (name, "ModuleScript".to_string(), false)
-    };
+    let (name, class_name, is_entry) =
+        if file_name == "init.server.luau" || file_name == "init.server.lua" {
+            // Entry point - will become the root Script
+            ("init".to_string(), "Script".to_string(), true)
+        } else if file_name.ends_with(".server.luau") || file_name.ends_with(".server.lua") {
+            let name = file_name
+                .trim_end_matches(".server.luau")
+                .trim_end_matches(".server.lua")
+                .to_string();
+            (name, "Script".to_string(), false)
+        } else if file_name.ends_with(".client.luau") || file_name.ends_with(".client.lua") {
+            let name = file_name
+                .trim_end_matches(".client.luau")
+                .trim_end_matches(".client.lua")
+                .to_string();
+            (name, "LocalScript".to_string(), false)
+        } else {
+            // Regular .luau file -> ModuleScript
+            let name = file_name
+                .trim_end_matches(".luau")
+                .trim_end_matches(".lua")
+                .to_string();
+            (name, "ModuleScript".to_string(), false)
+        };
 
     Ok(ScriptFile {
         name,
@@ -232,20 +231,12 @@ fn build_dom(plugin_name: &str, entry: &ScriptFile, all_scripts: &[ScriptFile]) 
 pub fn get_studio_plugins_folder() -> Option<PathBuf> {
     #[cfg(target_os = "macos")]
     {
-        dirs::home_dir().map(|home| {
-            home.join("Documents")
-                .join("Roblox")
-                .join("Plugins")
-        })
+        dirs::home_dir().map(|home| home.join("Documents").join("Roblox").join("Plugins"))
     }
 
     #[cfg(target_os = "windows")]
     {
-        dirs::data_local_dir().map(|local| {
-            local
-                .join("Roblox")
-                .join("Plugins")
-        })
+        dirs::data_local_dir().map(|local| local.join("Roblox").join("Plugins"))
     }
 
     #[cfg(target_os = "linux")]

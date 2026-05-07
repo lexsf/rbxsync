@@ -1,8 +1,9 @@
 use rmcp::{
     handler::server::{router::tool::ToolRouter, wrapper::Parameters},
     model::{ErrorData as McpError, *},
-    schemars, tool, tool_handler, tool_router, ServerHandler, ServiceExt,
+    schemars, tool, tool_handler, tool_router,
     transport::stdio,
+    ServerHandler, ServiceExt,
 };
 use serde::Deserialize;
 use std::borrow::Cow;
@@ -10,7 +11,9 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 pub mod luau_helpers;
 mod tools;
-use luau_helpers::{escape_luau_string, json_value_to_luau, luau_navigate_snippet, validate_luau_identifier};
+use luau_helpers::{
+    escape_luau_string, json_value_to_luau, luau_navigate_snippet, validate_luau_identifier,
+};
 use tools::RbxSyncClient;
 
 /// RbxSync MCP Server - provides tools for extracting and syncing Roblox games
@@ -100,7 +103,9 @@ pub struct GitStatusParams {
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct VerifyParams {
     /// Check type: property, count, find, children, attribute, distance, backpack, leaderstat
-    #[schemars(description = "Check type: property, count, find, children, attribute, distance, backpack, leaderstat")]
+    #[schemars(
+        description = "Check type: property, count, find, children, attribute, distance, backpack, leaderstat"
+    )]
     pub check: String,
     /// Instance path (e.g., "Workspace.SpawnLocation")
     #[schemars(description = "Instance path (e.g., 'Workspace.SpawnLocation')")]
@@ -175,7 +180,9 @@ pub struct RunTestParams {
     pub mode: Option<String>,
     /// If true, start the test and return immediately without waiting for completion.
     /// Use this for interactive bot testing with bot_observe/bot_move/bot_action.
-    #[schemars(description = "Run in background mode - start test and return immediately (default: false)")]
+    #[schemars(
+        description = "Run in background mode - start test and return immediately (default: false)"
+    )]
     pub background: Option<bool>,
     /// Optional Place ID to target a specific Studio instance in multi-place projects
     #[schemars(description = "Place ID to target (optional, for multi-place projects)")]
@@ -219,7 +226,9 @@ pub struct InsertModelParams {
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct BotObserveParams {
     /// Type of observation: "state", "nearby", "npcs", "inventory", "find"
-    #[schemars(description = "Observation type: state (full), nearby (objects), npcs, inventory, find (search)")]
+    #[schemars(
+        description = "Observation type: state (full), nearby (objects), npcs, inventory, find (search)"
+    )]
     #[serde(rename = "type", default = "default_observe_type")]
     pub observe_type: String,
     /// Radius for nearby/npcs observations (default: 50 studs)
@@ -421,7 +430,9 @@ pub struct FindInstancesParams {
     #[schemars(description = "Filter by Name (supports * wildcard, e.g., 'Enemy*')")]
     pub name: Option<String>,
     /// Search within a specific path (e.g., "Workspace/Enemies")
-    #[schemars(description = "Search within path (e.g., 'Workspace/Enemies'). Omit for entire game.")]
+    #[schemars(
+        description = "Search within path (e.g., 'Workspace/Enemies'). Omit for entire game."
+    )]
     pub parent: Option<String>,
     /// Maximum number of results to return (default: 100, max: 1000)
     #[schemars(description = "Max results (default: 100, max: 1000)")]
@@ -554,7 +565,9 @@ pub struct SetPropertyParams {
     #[schemars(description = "Property name (e.g., 'Anchored', 'Transparency', 'Name')")]
     pub property: String,
     /// Value to set. Strings, numbers, booleans, or objects for Vector3/Color3.
-    #[schemars(description = "Value - string, number, boolean, or {\"X\":1,\"Y\":2,\"Z\":3} for Vector3")]
+    #[schemars(
+        description = "Value - string, number, boolean, or {\"X\":1,\"Y\":2,\"Z\":3} for Vector3"
+    )]
     pub value: serde_json::Value,
 }
 
@@ -703,9 +716,15 @@ impl RbxSyncServer {
         match self.client.get_playtest_status().await {
             Ok(status) => {
                 if let Some(data) = &status.data {
-                    let running = data.get("running").and_then(|v| v.as_bool()).unwrap_or(false);
+                    let running = data
+                        .get("running")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false);
                     if !running {
-                        return Some("No active playtest. Start one with start_playtest or run_test first.".to_string());
+                        return Some(
+                            "No active playtest. Start one with start_playtest or run_test first."
+                                .to_string(),
+                        );
                     }
                 }
                 None
@@ -757,7 +776,9 @@ impl RbxSyncServer {
 
     /// Set the active Roblox place for subsequent commands.
     /// Use to target a specific Studio instance in multi-place projects.
-    #[tool(description = "Set the active Roblox place for subsequent commands. Use to target a specific Studio instance in multi-place projects.")]
+    #[tool(
+        description = "Set the active Roblox place for subsequent commands. Use to target a specific Studio instance in multi-place projects."
+    )]
     async fn set_active_place(
         &self,
         Parameters(params): Parameters<SetActivePlaceParams>,
@@ -802,8 +823,13 @@ impl RbxSyncServer {
             extract_body["session_id"] = serde_json::json!(sid);
         }
 
-        let session = self.client
-            .start_extraction(&params.project_dir, params.services.as_deref(), params.include_terrain)
+        let session = self
+            .client
+            .start_extraction(
+                &params.project_dir,
+                params.services.as_deref(),
+                params.include_terrain,
+            )
             .await
             .map_err(|e| mcp_error(e.to_string()))?;
 
@@ -811,7 +837,11 @@ impl RbxSyncServer {
         loop {
             tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
 
-            let status = self.client.get_extraction_status().await.map_err(|e| mcp_error(e.to_string()))?;
+            let status = self
+                .client
+                .get_extraction_status()
+                .await
+                .map_err(|e| mcp_error(e.to_string()))?;
 
             if status.complete {
                 break;
@@ -825,7 +855,8 @@ impl RbxSyncServer {
         }
 
         // Finalize extraction
-        let result = self.client
+        let result = self
+            .client
             .finalize_extraction(&session.session_id, &params.project_dir)
             .await
             .map_err(|e| mcp_error(e.to_string()))?;
@@ -878,7 +909,11 @@ impl RbxSyncServer {
                     .await
                     .map_err(|e| mcp_error(e.to_string()))?;
 
-                let applied = result.data.as_ref().map(|d| d.applied).unwrap_or(result.applied);
+                let applied = result
+                    .data
+                    .as_ref()
+                    .map(|d| d.applied)
+                    .unwrap_or(result.applied);
                 per_place_results.push(serde_json::json!({
                     "place_id": pid,
                     "session_id": session_id,
@@ -907,14 +942,22 @@ impl RbxSyncServer {
         };
 
         // Use incremental sync - only reads files modified since last sync
-        let incremental = self.client.read_incremental(&params.project_dir).await.map_err(|e| mcp_error(e.to_string()))?;
+        let incremental = self
+            .client
+            .read_incremental(&params.project_dir)
+            .await
+            .map_err(|e| mcp_error(e.to_string()))?;
 
         // Build sync operations in the format expected by the plugin
         let mut operations = tools::build_sync_operations(incremental.instances);
 
         // If delete flag is set, add delete operations for orphaned instances
         let delete_count = if params.delete.unwrap_or(false) {
-            let diff = self.client.get_diff(&params.project_dir).await.map_err(|e| mcp_error(e.to_string()))?;
+            let diff = self
+                .client
+                .get_diff(&params.project_dir)
+                .await
+                .map_err(|e| mcp_error(e.to_string()))?;
             let removed_count = diff.removed.len();
             for entry in diff.removed {
                 operations.push(serde_json::json!({
@@ -928,12 +971,18 @@ impl RbxSyncServer {
         };
 
         if operations.is_empty() {
-            return Ok(CallToolResult::success(vec![Content::text("No changes to sync.")]));
+            return Ok(CallToolResult::success(vec![Content::text(
+                "No changes to sync.",
+            )]));
         }
 
         // Apply changes (pass project_dir for operation tracking - RBXSYNC-77)
         // session_id will be used by server-side routing once Task 4 lands
-        let result = self.client.sync_batch(&operations, Some(&params.project_dir)).await.map_err(|e| mcp_error(e.to_string()))?;
+        let result = self
+            .client
+            .sync_batch(&operations, Some(&params.project_dir))
+            .await
+            .map_err(|e| mcp_error(e.to_string()))?;
 
         // Check if sync was skipped (disabled or extraction in progress)
         if let Some(ref data) = result.data {
@@ -946,14 +995,26 @@ impl RbxSyncServer {
         }
 
         // Extract applied count from nested data or top-level field
-        let applied = result.data.as_ref().map(|d| d.applied).unwrap_or(result.applied);
-        let errors = result.data.as_ref().map(|d| d.errors.clone()).unwrap_or(result.errors);
+        let applied = result
+            .data
+            .as_ref()
+            .map(|d| d.applied)
+            .unwrap_or(result.applied);
+        let errors = result
+            .data
+            .as_ref()
+            .map(|d| d.errors.clone())
+            .unwrap_or(result.errors);
 
         if result.success && errors.is_empty() {
             // Mark as synced for next incremental sync
             let _ = self.client.mark_synced(&params.project_dir).await;
 
-            let sync_type = if incremental.full_sync { "full" } else { "incremental" };
+            let sync_type = if incremental.full_sync {
+                "full"
+            } else {
+                "incremental"
+            };
             let msg = if delete_count > 0 {
                 format!(
                     "Successfully synced {} instances ({} sync, checked {} files) and deleted {} orphans.",
@@ -977,12 +1038,15 @@ impl RbxSyncServer {
     /// Compare local project files against Studio state.
     /// Shows what instances exist locally but not in Studio (added),
     /// what exists in Studio but not locally (removed), and unchanged count.
-    #[tool(description = "Diff local project files vs Studio state - shows added, removed, and unchanged instances")]
+    #[tool(
+        description = "Diff local project files vs Studio state - shows added, removed, and unchanged instances"
+    )]
     async fn diff(
         &self,
         Parameters(params): Parameters<DiffParams>,
     ) -> Result<CallToolResult, McpError> {
-        let diff = self.client
+        let diff = self
+            .client
             .get_diff(&params.project_dir)
             .await
             .map_err(|e| mcp_error(e.to_string()))?;
@@ -1013,7 +1077,9 @@ impl RbxSyncServer {
             }
         }
 
-        Ok(CallToolResult::success(vec![Content::text(lines.join("\n"))]))
+        Ok(CallToolResult::success(vec![Content::text(
+            lines.join("\n"),
+        )]))
     }
 
     /// Get the git status of a project directory.
@@ -1022,10 +1088,16 @@ impl RbxSyncServer {
         &self,
         Parameters(params): Parameters<GitStatusParams>,
     ) -> Result<CallToolResult, McpError> {
-        let status = self.client.get_git_status(&params.project_dir).await.map_err(|e| mcp_error(e.to_string()))?;
+        let status = self
+            .client
+            .get_git_status(&params.project_dir)
+            .await
+            .map_err(|e| mcp_error(e.to_string()))?;
 
         if !status.is_repo {
-            return Ok(CallToolResult::success(vec![Content::text("Not a git repository.")]));
+            return Ok(CallToolResult::success(vec![Content::text(
+                "Not a git repository.",
+            )]));
         }
 
         let mut lines = vec![format!("Branch: {}", status.branch.unwrap_or_default())];
@@ -1051,7 +1123,9 @@ impl RbxSyncServer {
             }
         }
 
-        Ok(CallToolResult::success(vec![Content::text(lines.join("\n"))]))
+        Ok(CallToolResult::success(vec![Content::text(
+            lines.join("\n"),
+        )]))
     }
 
     /// Commit changes to git.
@@ -1060,8 +1134,13 @@ impl RbxSyncServer {
         &self,
         Parameters(params): Parameters<GitCommitParams>,
     ) -> Result<CallToolResult, McpError> {
-        let result = self.client
-            .git_commit(&params.project_dir, &params.message, params.files.as_deref())
+        let result = self
+            .client
+            .git_commit(
+                &params.project_dir,
+                &params.message,
+                params.files.as_deref(),
+            )
             .await
             .map_err(|e| mcp_error(e.to_string()))?;
 
@@ -1100,7 +1179,11 @@ impl RbxSyncServer {
         };
         // session_id will be used by server-side routing once Task 4 lands
 
-        let result = self.client.run_code(&params.code).await.map_err(|e| mcp_error(e.to_string()))?;
+        let result = self
+            .client
+            .run_code(&params.code)
+            .await
+            .map_err(|e| mcp_error(e.to_string()))?;
         Ok(CallToolResult::success(vec![Content::text(result)]))
     }
 
@@ -1110,7 +1193,9 @@ impl RbxSyncServer {
     /// then use bot_observe/bot_move/bot_action while the test runs.
     /// IMPORTANT: Stop playtest with stop_playtest before making code changes.
     /// Changes won't take effect until you stop the playtest, sync, then run_test again.
-    #[tool(description = "Run automated play test in Studio and return console output. For interactive bot testing, use background: true to start test and return immediately. IMPORTANT: Stop playtest with stop_playtest before making code changes.")]
+    #[tool(
+        description = "Run automated play test in Studio and return console output. For interactive bot testing, use background: true to start test and return immediately. IMPORTANT: Stop playtest with stop_playtest before making code changes."
+    )]
     async fn run_test(
         &self,
         Parameters(params): Parameters<RunTestParams>,
@@ -1132,17 +1217,20 @@ impl RbxSyncServer {
         // session_id will be used by server-side routing once Task 4 lands
 
         // Use the new playtest control endpoints for reliable lifecycle management
-        let start_result = self.client
+        let start_result = self
+            .client
             .start_playtest(params.mode.as_deref())
             .await
             .map_err(|e| mcp_error(e.to_string()))?;
 
         if !start_result.success {
-            let error_msg = start_result.error
+            let error_msg = start_result
+                .error
                 .or(start_result.message)
                 .unwrap_or_else(|| "Unknown error".to_string());
             return Ok(CallToolResult::success(vec![Content::text(format!(
-                "Failed to start test: {}", error_msg
+                "Failed to start test: {}",
+                error_msg
             ))]));
         }
 
@@ -1170,7 +1258,10 @@ impl RbxSyncServer {
             let status = self.client.get_playtest_status().await;
             if let Ok(status) = status {
                 if let Some(data) = &status.data {
-                    let running = data.get("running").and_then(|v| v.as_bool()).unwrap_or(true);
+                    let running = data
+                        .get("running")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(true);
                     if !running {
                         break;
                     }
@@ -1183,26 +1274,34 @@ impl RbxSyncServer {
         }
 
         // Stop the playtest and collect output
-        let stop_result = self.client.stop_playtest().await.map_err(|e| mcp_error(e.to_string()))?;
+        let stop_result = self
+            .client
+            .stop_playtest()
+            .await
+            .map_err(|e| mcp_error(e.to_string()))?;
 
         let elapsed = start_time.elapsed().as_secs_f64();
-        let mut output_lines = vec![
-            format!("Test completed in {:.1}s", elapsed),
-        ];
+        let mut output_lines = vec![format!("Test completed in {:.1}s", elapsed)];
 
         if let Some(data) = &stop_result.data {
-            let total_messages = data.get("totalMessages").and_then(|v| v.as_i64()).unwrap_or(0);
+            let total_messages = data
+                .get("totalMessages")
+                .and_then(|v| v.as_i64())
+                .unwrap_or(0);
             output_lines.push(format!("Total messages: {}", total_messages));
             output_lines.push(String::new());
 
             if let Some(messages) = data.get("output").and_then(|v| v.as_array()) {
-                let errors: Vec<_> = messages.iter()
+                let errors: Vec<_> = messages
+                    .iter()
                     .filter(|m| m.get("type").and_then(|v| v.as_str()) == Some("MessageError"))
                     .collect();
-                let warnings: Vec<_> = messages.iter()
+                let warnings: Vec<_> = messages
+                    .iter()
                     .filter(|m| m.get("type").and_then(|v| v.as_str()) == Some("MessageWarning"))
                     .collect();
-                let prints: Vec<_> = messages.iter()
+                let prints: Vec<_> = messages
+                    .iter()
                     .filter(|m| m.get("type").and_then(|v| v.as_str()) == Some("MessageOutput"))
                     .collect();
 
@@ -1241,7 +1340,9 @@ impl RbxSyncServer {
             }
         }
 
-        Ok(CallToolResult::success(vec![Content::text(output_lines.join("\n"))]))
+        Ok(CallToolResult::success(vec![Content::text(
+            output_lines.join("\n"),
+        )]))
     }
 
     /// Stop any running playtest in Roblox Studio.
@@ -1253,11 +1354,15 @@ impl RbxSyncServer {
         if let Some(err) = self.require_connection().await? {
             return Ok(err);
         }
-        let result = self.client.stop_playtest().await.map_err(|e| mcp_error(e.to_string()))?;
+        let result = self
+            .client
+            .stop_playtest()
+            .await
+            .map_err(|e| mcp_error(e.to_string()))?;
 
         if result.success {
             Ok(CallToolResult::success(vec![Content::text(
-                "Playtest stopped successfully.".to_string()
+                "Playtest stopped successfully.".to_string(),
             )]))
         } else {
             Ok(CallToolResult::success(vec![Content::text(format!(
@@ -1275,29 +1380,47 @@ impl RbxSyncServer {
     /// Unlike run_test, this starts the playtest without an auto-stop timer.
     /// The playtest runs until explicitly stopped via stop_playtest.
     /// Use this for interactive testing with bot tools.
-    #[tool(description = "Start a playtest session in Studio. Runs until stop_playtest is called. Use for interactive bot testing.")]
+    #[tool(
+        description = "Start a playtest session in Studio. Runs until stop_playtest is called. Use for interactive bot testing."
+    )]
     async fn start_playtest(
         &self,
         #[allow(unused)] Parameters(params): Parameters<StartPlaytestParams>,
     ) -> Result<CallToolResult, McpError> {
-        let result = self.client
+        let result = self
+            .client
             .start_playtest(params.mode.as_deref())
             .await
             .map_err(|e| mcp_error(e.to_string()))?;
 
         if !result.success {
-            let error_msg = result.error
+            let error_msg = result
+                .error
                 .or(result.message.clone())
-                .or_else(|| result.data.as_ref().and_then(|d| d.get("message").and_then(|v| v.as_str()).map(|s| s.to_string())))
+                .or_else(|| {
+                    result.data.as_ref().and_then(|d| {
+                        d.get("message")
+                            .and_then(|v| v.as_str())
+                            .map(|s| s.to_string())
+                    })
+                })
                 .unwrap_or_else(|| "Unknown error".to_string());
             return Ok(CallToolResult::success(vec![Content::text(format!(
-                "Failed to start playtest: {}", error_msg
+                "Failed to start playtest: {}",
+                error_msg
             ))]));
         }
 
         let mode = params.mode.as_deref().unwrap_or("Play");
-        let message = result.message
-            .or_else(|| result.data.as_ref().and_then(|d| d.get("message").and_then(|v| v.as_str()).map(|s| s.to_string())))
+        let message = result
+            .message
+            .or_else(|| {
+                result.data.as_ref().and_then(|d| {
+                    d.get("message")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string())
+                })
+            })
             .unwrap_or_else(|| format!("Playtest started (mode: {})", mode));
 
         Ok(CallToolResult::success(vec![Content::text(format!(
@@ -1313,7 +1436,8 @@ impl RbxSyncServer {
         &self,
         #[allow(unused)] Parameters(_params): Parameters<StopPlaytestParams>,
     ) -> Result<CallToolResult, McpError> {
-        let result = self.client
+        let result = self
+            .client
             .stop_playtest()
             .await
             .map_err(|e| mcp_error(e.to_string()))?;
@@ -1338,13 +1462,18 @@ impl RbxSyncServer {
             if let Some(messages) = data.get("output").and_then(|v| v.as_array()) {
                 if !messages.is_empty() {
                     output_lines.push(String::new());
-                    let errors: Vec<_> = messages.iter()
+                    let errors: Vec<_> = messages
+                        .iter()
                         .filter(|m| m.get("type").and_then(|v| v.as_str()) == Some("MessageError"))
                         .collect();
-                    let warnings: Vec<_> = messages.iter()
-                        .filter(|m| m.get("type").and_then(|v| v.as_str()) == Some("MessageWarning"))
+                    let warnings: Vec<_> = messages
+                        .iter()
+                        .filter(|m| {
+                            m.get("type").and_then(|v| v.as_str()) == Some("MessageWarning")
+                        })
                         .collect();
-                    let prints: Vec<_> = messages.iter()
+                    let prints: Vec<_> = messages
+                        .iter()
                         .filter(|m| m.get("type").and_then(|v| v.as_str()) == Some("MessageOutput"))
                         .collect();
 
@@ -1383,7 +1512,9 @@ impl RbxSyncServer {
             }
         }
 
-        Ok(CallToolResult::success(vec![Content::text(output_lines.join("\n"))]))
+        Ok(CallToolResult::success(vec![Content::text(
+            output_lines.join("\n"),
+        )]))
     }
 
     /// Get the current playtest status.
@@ -1393,7 +1524,8 @@ impl RbxSyncServer {
         &self,
         #[allow(unused)] Parameters(_params): Parameters<PlaytestStatusParams>,
     ) -> Result<CallToolResult, McpError> {
-        let result = self.client
+        let result = self
+            .client
             .get_playtest_status()
             .await
             .map_err(|e| mcp_error(e.to_string()))?;
@@ -1408,10 +1540,22 @@ impl RbxSyncServer {
         let mut output_lines = vec![];
 
         if let Some(data) = &result.data {
-            let running = data.get("running").and_then(|v| v.as_bool()).unwrap_or(false);
-            let mode = data.get("mode").and_then(|v| v.as_str()).unwrap_or("unknown");
-            let capturing = data.get("capturing").and_then(|v| v.as_bool()).unwrap_or(false);
-            let total_messages = data.get("totalMessages").and_then(|v| v.as_i64()).unwrap_or(0);
+            let running = data
+                .get("running")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            let mode = data
+                .get("mode")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown");
+            let capturing = data
+                .get("capturing")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            let total_messages = data
+                .get("totalMessages")
+                .and_then(|v| v.as_i64())
+                .unwrap_or(0);
 
             output_lines.push(format!("Running: {}", running));
             output_lines.push(format!("Mode: {}", mode));
@@ -1427,7 +1571,9 @@ impl RbxSyncServer {
             output_lines.push("No status data available.".to_string());
         }
 
-        Ok(CallToolResult::success(vec![Content::text(output_lines.join("\n"))]))
+        Ok(CallToolResult::success(vec![Content::text(
+            output_lines.join("\n"),
+        )]))
     }
 
     // ========================================================================
@@ -1437,7 +1583,9 @@ impl RbxSyncServer {
     /// Observe current game state during a playtest.
     /// Returns character position, health, inventory, nearby objects/NPCs, and visible UI.
     /// Must be called during an active playtest (after run_test or manual F5).
-    #[tool(description = "Observe game state during playtest - get position, health, inventory, nearby objects")]
+    #[tool(
+        description = "Observe game state during playtest - get position, health, inventory, nearby objects"
+    )]
     async fn bot_observe(
         &self,
         Parameters(params): Parameters<BotObserveParams>,
@@ -1448,7 +1596,8 @@ impl RbxSyncServer {
         if let Some(msg) = self.check_playtest_active().await {
             return Ok(CallToolResult::success(vec![Content::text(msg)]));
         }
-        let result = self.client
+        let result = self
+            .client
             .bot_observe(&params.observe_type, params.radius, params.query.as_deref())
             .await
             .map_err(|e| mcp_error(e.to_string()))?;
@@ -1461,8 +1610,8 @@ impl RbxSyncServer {
         }
 
         // Format the state nicely
-        let state_json = serde_json::to_string_pretty(&result.data)
-            .unwrap_or_else(|_| "{}".to_string());
+        let state_json =
+            serde_json::to_string_pretty(&result.data).unwrap_or_else(|_| "{}".to_string());
 
         Ok(CallToolResult::success(vec![Content::text(format!(
             "Game State:\n{}",
@@ -1488,7 +1637,7 @@ impl RbxSyncServer {
         // Validate: at least one of position or objectName must be provided
         if params.position.is_none() && params.object_name.is_none() {
             return Ok(CallToolResult::error(vec![Content::text(
-                "Error: Must provide either 'position' ({x, y, z}) or 'objectName' (string)."
+                "Error: Must provide either 'position' ({x, y, z}) or 'objectName' (string).",
             )]));
         }
 
@@ -1504,7 +1653,8 @@ impl RbxSyncServer {
             }
         }
 
-        let result = self.client
+        let result = self
+            .client
             .bot_move(params.position, params.object_name.as_deref())
             .await
             .map_err(|e| mcp_error(e.to_string()))?;
@@ -1516,12 +1666,16 @@ impl RbxSyncServer {
             ))]));
         }
 
-        let reached = result.data.as_ref()
+        let reached = result
+            .data
+            .as_ref()
             .and_then(|d| d.get("reached"))
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
 
-        let final_pos = result.data.as_ref()
+        let final_pos = result
+            .data
+            .as_ref()
             .and_then(|d| d.get("finalPosition"))
             .map(|v| format!("{}", v))
             .unwrap_or_default();
@@ -1543,7 +1697,9 @@ impl RbxSyncServer {
     /// Perform character actions: equip/unequip tools, activate abilities, interact with objects.
     /// Actions: equip, unequip, activate, deactivate, interact, jump
     /// Must be called during an active playtest.
-    #[tool(description = "Perform actions: equip/unequip tools, activate, interact with objects, jump")]
+    #[tool(
+        description = "Perform actions: equip/unequip tools, activate, interact with objects, jump"
+    )]
     async fn bot_action(
         &self,
         Parameters(params): Parameters<BotActionParams>,
@@ -1554,7 +1710,8 @@ impl RbxSyncServer {
         if let Some(msg) = self.check_playtest_active().await {
             return Ok(CallToolResult::success(vec![Content::text(msg)]));
         }
-        let result = self.client
+        let result = self
+            .client
             .bot_action(&params.action, params.name.as_deref())
             .await
             .map_err(|e| mcp_error(e.to_string()))?;
@@ -1567,15 +1724,16 @@ impl RbxSyncServer {
             ))]));
         }
 
-        let action_result = result.data.as_ref()
+        let action_result = result
+            .data
+            .as_ref()
             .and_then(|d| d.get("result"))
             .map(|v| format!("{}", v))
             .unwrap_or_else(|| "completed".to_string());
 
         Ok(CallToolResult::success(vec![Content::text(format!(
             "Action '{}' completed: {}",
-            params.action,
-            action_result
+            params.action, action_result
         ))]))
     }
 
@@ -1593,7 +1751,8 @@ impl RbxSyncServer {
         if let Some(msg) = self.check_playtest_active().await {
             return Ok(CallToolResult::success(vec![Content::text(msg)]));
         }
-        let result = self.client
+        let result = self
+            .client
             .bot_command(&params.command_type, &params.command, params.args.clone())
             .await
             .map_err(|e| mcp_error(e.to_string()))?;
@@ -1607,14 +1766,12 @@ impl RbxSyncServer {
             ))]));
         }
 
-        let result_json = serde_json::to_string_pretty(&result.data)
-            .unwrap_or_else(|_| "{}".to_string());
+        let result_json =
+            serde_json::to_string_pretty(&result.data).unwrap_or_else(|_| "{}".to_string());
 
         Ok(CallToolResult::success(vec![Content::text(format!(
             "Command '{}.{}' result:\n{}",
-            params.command_type,
-            params.command,
-            result_json
+            params.command_type, params.command, result_json
         ))]))
     }
 
@@ -1622,7 +1779,9 @@ impl RbxSyncServer {
     /// Use this to query game state that only exists on the server (currency, DataStores, services).
     /// Returns the result of the code execution.
     /// Must be called during an active playtest.
-    #[tool(description = "Execute Luau code on game server during playtest - query currency, DataStores, services")]
+    #[tool(
+        description = "Execute Luau code on game server during playtest - query currency, DataStores, services"
+    )]
     async fn bot_query_server(
         &self,
         Parameters(params): Parameters<BotQueryServerParams>,
@@ -1634,7 +1793,8 @@ impl RbxSyncServer {
             return Ok(CallToolResult::success(vec![Content::text(msg)]));
         }
         // Send as a dedicated bot query server command
-        let result = self.client
+        let result = self
+            .client
             .bot_query_server(&params.code)
             .await
             .map_err(|e| mcp_error(e.to_string()))?;
@@ -1647,12 +1807,16 @@ impl RbxSyncServer {
         }
 
         // Extract the result from the response
-        let query_result = result.data.as_ref()
+        let query_result = result
+            .data
+            .as_ref()
             .and_then(|d| d.get("result"))
             .cloned()
             .unwrap_or(serde_json::Value::Null);
 
-        let context = result.data.as_ref()
+        let context = result
+            .data
+            .as_ref()
             .and_then(|d| d.get("context"))
             .and_then(|c| c.as_str())
             .unwrap_or("unknown");
@@ -1662,8 +1826,7 @@ impl RbxSyncServer {
 
         Ok(CallToolResult::success(vec![Content::text(format!(
             "Server query result (context: {}):\n{}",
-            context,
-            result_str
+            context, result_str
         ))]))
     }
 
@@ -1683,14 +1846,23 @@ impl RbxSyncServer {
             return Ok(CallToolResult::success(vec![Content::text(msg)]));
         }
         let context = params.context.as_deref().unwrap_or("server");
-        let command = if context == "server" { "waitForServer" } else { "waitFor" };
+        let command = if context == "server" {
+            "waitForServer"
+        } else {
+            "waitFor"
+        };
 
-        let result = self.client
-            .bot_command("query", command, Some(serde_json::json!({
-                "condition": params.condition,
-                "timeout": params.timeout.unwrap_or(30.0),
-                "pollInterval": params.poll_interval.unwrap_or(100)
-            })))
+        let result = self
+            .client
+            .bot_command(
+                "query",
+                command,
+                Some(serde_json::json!({
+                    "condition": params.condition,
+                    "timeout": params.timeout.unwrap_or(30.0),
+                    "pollInterval": params.poll_interval.unwrap_or(100)
+                })),
+            )
             .await
             .map_err(|e| mcp_error(e.to_string()))?;
 
@@ -1701,17 +1873,23 @@ impl RbxSyncServer {
             ))]));
         }
 
-        let condition_met = result.data.as_ref()
+        let condition_met = result
+            .data
+            .as_ref()
             .and_then(|d| d.get("result"))
             .and_then(|r| r.as_bool())
             .unwrap_or(false);
 
-        let timed_out = result.data.as_ref()
+        let timed_out = result
+            .data
+            .as_ref()
             .and_then(|d| d.get("timedOut"))
             .and_then(|t| t.as_bool())
             .unwrap_or(false);
 
-        let elapsed = result.data.as_ref()
+        let elapsed = result
+            .data
+            .as_ref()
             .and_then(|d| d.get("elapsed"))
             .and_then(|e| e.as_f64())
             .unwrap_or(0.0);
@@ -1729,8 +1907,7 @@ impl RbxSyncServer {
         } else {
             Ok(CallToolResult::success(vec![Content::text(format!(
                 "Wait completed in {:.2}s, result: {:?}",
-                elapsed,
-                result.data
+                elapsed, result.data
             ))]))
         }
     }
@@ -1759,7 +1936,11 @@ impl RbxSyncServer {
             path = path_escaped,
         );
 
-        let result = self.client.run_code(&code).await.map_err(|e| mcp_error(e.to_string()))?;
+        let result = self
+            .client
+            .run_code(&code)
+            .await
+            .map_err(|e| mcp_error(e.to_string()))?;
         Ok(CallToolResult::success(vec![Content::text(result)]))
     }
 
@@ -1769,9 +1950,8 @@ impl RbxSyncServer {
         &self,
         Parameters(params): Parameters<AddTagParams>,
     ) -> Result<CallToolResult, McpError> {
-        validate_luau_identifier(&params.tag).map_err(|e| {
-            mcp_error(format!("Invalid tag name: {}", e))
-        })?;
+        validate_luau_identifier(&params.tag)
+            .map_err(|e| mcp_error(format!("Invalid tag name: {}", e)))?;
 
         let navigate = luau_navigate_snippet(&params.path);
         let path_escaped = escape_luau_string(&params.path);
@@ -1788,7 +1968,11 @@ impl RbxSyncServer {
             tag = tag_escaped,
         );
 
-        let result = self.client.run_code(&code).await.map_err(|e| mcp_error(e.to_string()))?;
+        let result = self
+            .client
+            .run_code(&code)
+            .await
+            .map_err(|e| mcp_error(e.to_string()))?;
         Ok(CallToolResult::success(vec![Content::text(result)]))
     }
 
@@ -1798,9 +1982,8 @@ impl RbxSyncServer {
         &self,
         Parameters(params): Parameters<RemoveTagParams>,
     ) -> Result<CallToolResult, McpError> {
-        validate_luau_identifier(&params.tag).map_err(|e| {
-            mcp_error(format!("Invalid tag name: {}", e))
-        })?;
+        validate_luau_identifier(&params.tag)
+            .map_err(|e| mcp_error(format!("Invalid tag name: {}", e)))?;
 
         let navigate = luau_navigate_snippet(&params.path);
         let path_escaped = escape_luau_string(&params.path);
@@ -1820,7 +2003,11 @@ impl RbxSyncServer {
             tag = tag_escaped,
         );
 
-        let result = self.client.run_code(&code).await.map_err(|e| mcp_error(e.to_string()))?;
+        let result = self
+            .client
+            .run_code(&code)
+            .await
+            .map_err(|e| mcp_error(e.to_string()))?;
         Ok(CallToolResult::success(vec![Content::text(result)]))
     }
 
@@ -1831,9 +2018,8 @@ impl RbxSyncServer {
         &self,
         Parameters(params): Parameters<GetTaggedParams>,
     ) -> Result<CallToolResult, McpError> {
-        validate_luau_identifier(&params.tag).map_err(|e| {
-            mcp_error(format!("Invalid tag name: {}", e))
-        })?;
+        validate_luau_identifier(&params.tag)
+            .map_err(|e| mcp_error(format!("Invalid tag name: {}", e)))?;
 
         let tag_escaped = escape_luau_string(&params.tag);
         let limit = params.limit.unwrap_or(100).min(500);
@@ -1855,7 +2041,11 @@ impl RbxSyncServer {
             limit = limit,
         );
 
-        let result = self.client.run_code(&code).await.map_err(|e| mcp_error(e.to_string()))?;
+        let result = self
+            .client
+            .run_code(&code)
+            .await
+            .map_err(|e| mcp_error(e.to_string()))?;
         Ok(CallToolResult::success(vec![Content::text(result)]))
     }
 
@@ -1895,7 +2085,11 @@ impl RbxSyncServer {
             path = path_escaped,
         );
 
-        let result = self.client.run_code(&code).await.map_err(|e| mcp_error(e.to_string()))?;
+        let result = self
+            .client
+            .run_code(&code)
+            .await
+            .map_err(|e| mcp_error(e.to_string()))?;
         Ok(CallToolResult::success(vec![Content::text(result)]))
     }
 
@@ -1907,7 +2101,8 @@ impl RbxSyncServer {
         Parameters(params): Parameters<SetAttributeParams>,
     ) -> Result<CallToolResult, McpError> {
         // Validate attribute name to prevent Luau injection
-        validate_luau_identifier(&params.name).map_err(|e| mcp_error(format!("Invalid attribute name: {}", e)))?;
+        validate_luau_identifier(&params.name)
+            .map_err(|e| mcp_error(format!("Invalid attribute name: {}", e)))?;
 
         let navigate = luau_navigate_snippet(&params.path);
         let path_escaped = escape_luau_string(&params.path);
@@ -1928,7 +2123,11 @@ impl RbxSyncServer {
             value = value_lua,
         );
 
-        let result = self.client.run_code(&code).await.map_err(|e| mcp_error(e.to_string()))?;
+        let result = self
+            .client
+            .run_code(&code)
+            .await
+            .map_err(|e| mcp_error(e.to_string()))?;
         Ok(CallToolResult::success(vec![Content::text(result)]))
     }
 
@@ -1940,7 +2139,8 @@ impl RbxSyncServer {
         Parameters(params): Parameters<DeleteAttributeParams>,
     ) -> Result<CallToolResult, McpError> {
         // Validate attribute name to prevent Luau injection
-        validate_luau_identifier(&params.name).map_err(|e| mcp_error(format!("Invalid attribute name: {}", e)))?;
+        validate_luau_identifier(&params.name)
+            .map_err(|e| mcp_error(format!("Invalid attribute name: {}", e)))?;
 
         let navigate = luau_navigate_snippet(&params.path);
         let path_escaped = escape_luau_string(&params.path);
@@ -1958,7 +2158,11 @@ impl RbxSyncServer {
             name = name_escaped,
         );
 
-        let result = self.client.run_code(&code).await.map_err(|e| mcp_error(e.to_string()))?;
+        let result = self
+            .client
+            .run_code(&code)
+            .await
+            .map_err(|e| mcp_error(e.to_string()))?;
         Ok(CallToolResult::success(vec![Content::text(result)]))
     }
 
@@ -1975,13 +2179,16 @@ impl RbxSyncServer {
         // Validate line range parameters (Luau arrays are 1-indexed)
         if let Some(s) = params.start_line {
             if s < 1 {
-                return Err(mcp_error("start_line must be >= 1 (Luau arrays are 1-indexed)"));
+                return Err(mcp_error(
+                    "start_line must be >= 1 (Luau arrays are 1-indexed)",
+                ));
             }
         }
         if let (Some(s), Some(e)) = (params.start_line, params.end_line) {
             if s > e {
                 return Err(mcp_error(format!(
-                    "start_line ({}) must be <= end_line ({})", s, e
+                    "start_line ({}) must be <= end_line ({})",
+                    s, e
                 )));
             }
         }
@@ -2021,7 +2228,11 @@ impl RbxSyncServer {
             line_filter = line_filter,
         );
 
-        let result = self.client.run_code(&code).await.map_err(|e| mcp_error(e.to_string()))?;
+        let result = self
+            .client
+            .run_code(&code)
+            .await
+            .map_err(|e| mcp_error(e.to_string()))?;
         Ok(CallToolResult::success(vec![Content::text(result)]))
     }
 
@@ -2048,7 +2259,11 @@ impl RbxSyncServer {
             source = source_escaped,
         );
 
-        let result = self.client.run_code(&code).await.map_err(|e| mcp_error(e.to_string()))?;
+        let result = self
+            .client
+            .run_code(&code)
+            .await
+            .map_err(|e| mcp_error(e.to_string()))?;
         Ok(CallToolResult::success(vec![Content::text(result)]))
     }
 
@@ -2061,11 +2276,14 @@ impl RbxSyncServer {
     ) -> Result<CallToolResult, McpError> {
         // Validate line range parameters (Luau arrays are 1-indexed)
         if params.start_line < 1 {
-            return Err(mcp_error("start_line must be >= 1 (Luau arrays are 1-indexed)"));
+            return Err(mcp_error(
+                "start_line must be >= 1 (Luau arrays are 1-indexed)",
+            ));
         }
         if params.start_line > params.end_line {
             return Err(mcp_error(format!(
-                "start_line ({}) must be <= end_line ({})", params.start_line, params.end_line
+                "start_line ({}) must be <= end_line ({})",
+                params.start_line, params.end_line
             )));
         }
 
@@ -2095,7 +2313,11 @@ impl RbxSyncServer {
             new_content = new_content_escaped,
         );
 
-        let result = self.client.run_code(&code).await.map_err(|e| mcp_error(e.to_string()))?;
+        let result = self
+            .client
+            .run_code(&code)
+            .await
+            .map_err(|e| mcp_error(e.to_string()))?;
         Ok(CallToolResult::success(vec![Content::text(result)]))
     }
 
@@ -2106,15 +2328,16 @@ impl RbxSyncServer {
     /// Set a single property on an instance by path.
     /// Supports booleans, numbers, strings, enums, Vector3, Color3, etc.
     /// For Vector3: use {"X":1,"Y":2,"Z":3}. For Color3: use {"R":255,"G":0,"B":0}.
-    #[tool(description = "Set a property on an instance by path (e.g., set Workspace/Part.Anchored to true)")]
+    #[tool(
+        description = "Set a property on an instance by path (e.g., set Workspace/Part.Anchored to true)"
+    )]
     async fn set_property(
         &self,
         Parameters(params): Parameters<SetPropertyParams>,
     ) -> Result<CallToolResult, McpError> {
         // Validate property name to prevent Luau injection (used as inst.{property})
-        validate_luau_identifier(&params.property).map_err(|e| {
-            mcp_error(format!("Invalid property name: {}", e))
-        })?;
+        validate_luau_identifier(&params.property)
+            .map_err(|e| mcp_error(format!("Invalid property name: {}", e)))?;
 
         let value_lua = json_value_to_luau(&params.value);
         let navigate = luau_navigate_snippet(&params.path);
@@ -2133,25 +2356,29 @@ impl RbxSyncServer {
             value = value_lua,
         );
 
-        let result = self.client.run_code(&code).await.map_err(|e| mcp_error(e.to_string()))?;
+        let result = self
+            .client
+            .run_code(&code)
+            .await
+            .map_err(|e| mcp_error(e.to_string()))?;
         Ok(CallToolResult::success(vec![Content::text(result)]))
     }
 
     /// Set the same property on all instances matching a ClassName filter.
     /// Optionally scoped to a parent path. Returns count of modified instances.
-    #[tool(description = "Set a property on all instances of a ClassName (e.g., set all Parts to Anchored=true)")]
+    #[tool(
+        description = "Set a property on all instances of a ClassName (e.g., set all Parts to Anchored=true)"
+    )]
     async fn mass_set_property(
         &self,
         Parameters(params): Parameters<MassSetPropertyParams>,
     ) -> Result<CallToolResult, McpError> {
         // Validate property name to prevent Luau injection (used as inst.{property})
-        validate_luau_identifier(&params.property).map_err(|e| {
-            mcp_error(format!("Invalid property name: {}", e))
-        })?;
+        validate_luau_identifier(&params.property)
+            .map_err(|e| mcp_error(format!("Invalid property name: {}", e)))?;
         // Validate class_name even though it's used in a string context (defense in depth)
-        validate_luau_identifier(&params.class_name).map_err(|e| {
-            mcp_error(format!("Invalid class name: {}", e))
-        })?;
+        validate_luau_identifier(&params.class_name)
+            .map_err(|e| mcp_error(format!("Invalid class name: {}", e)))?;
 
         let value_lua = json_value_to_luau(&params.value);
         let scope = luau_scope_snippet(&params.parent);
@@ -2185,28 +2412,32 @@ impl RbxSyncServer {
             value = value_lua,
         );
 
-        let result = self.client.run_code(&code).await.map_err(|e| mcp_error(e.to_string()))?;
+        let result = self
+            .client
+            .run_code(&code)
+            .await
+            .map_err(|e| mcp_error(e.to_string()))?;
         Ok(CallToolResult::success(vec![Content::text(result)]))
     }
 
     /// Find instances where a specific property matches a given value.
     /// Returns paths and classNames of matching instances.
-    #[tool(description = "Find instances with a specific property value (e.g., find Parts where Anchored=false)")]
+    #[tool(
+        description = "Find instances with a specific property value (e.g., find Parts where Anchored=false)"
+    )]
     async fn search_by_property(
         &self,
         Parameters(params): Parameters<SearchByPropertyParams>,
     ) -> Result<CallToolResult, McpError> {
         // Validate property name to prevent Luau injection (used as inst.{property})
-        validate_luau_identifier(&params.property).map_err(|e| {
-            mcp_error(format!("Invalid property name: {}", e))
-        })?;
+        validate_luau_identifier(&params.property)
+            .map_err(|e| mcp_error(format!("Invalid property name: {}", e)))?;
 
         let limit = params.limit.unwrap_or(50).min(200);
         let class_filter = match &params.class_name {
             Some(c) => {
-                validate_luau_identifier(c).map_err(|e| {
-                    mcp_error(format!("Invalid class name: {}", e))
-                })?;
+                validate_luau_identifier(c)
+                    .map_err(|e| mcp_error(format!("Invalid class name: {}", e)))?;
                 format!("inst:IsA(\"{}\")", escape_luau_string(c))
             }
             None => "true".to_string(),
@@ -2243,7 +2474,11 @@ impl RbxSyncServer {
             property = params.property,
         );
 
-        let result = self.client.run_code(&code).await.map_err(|e| mcp_error(e.to_string()))?;
+        let result = self
+            .client
+            .run_code(&code)
+            .await
+            .map_err(|e| mcp_error(e.to_string()))?;
         Ok(CallToolResult::success(vec![Content::text(result)]))
     }
 
@@ -2259,9 +2494,8 @@ impl RbxSyncServer {
         Parameters(params): Parameters<CreateInstanceParams>,
     ) -> Result<CallToolResult, McpError> {
         // Validate className to prevent Luau injection
-        validate_luau_identifier(&params.class_name).map_err(|e| {
-            mcp_error(format!("Invalid class name: {}", e))
-        })?;
+        validate_luau_identifier(&params.class_name)
+            .map_err(|e| mcp_error(format!("Invalid class name: {}", e)))?;
 
         let class_escaped = escape_luau_string(&params.class_name);
         let parent_escaped = escape_luau_string(&params.parent);
@@ -2283,7 +2517,9 @@ impl RbxSyncServer {
                     lines.push(format!(
                         "local ok, err = pcall(function() inst.{} = {} end)\n\
                         if not ok then table.insert(errors, \"{}: \" .. tostring(err)) end",
-                        key, luau_val, escape_luau_string(key)
+                        key,
+                        luau_val,
+                        escape_luau_string(key)
                     ));
                 }
                 lines.join("\n")
@@ -2313,7 +2549,11 @@ impl RbxSyncServer {
             prop_lines = prop_lines,
         );
 
-        let result = self.client.run_code(&code).await.map_err(|e| mcp_error(e.to_string()))?;
+        let result = self
+            .client
+            .run_code(&code)
+            .await
+            .map_err(|e| mcp_error(e.to_string()))?;
         Ok(CallToolResult::success(vec![Content::text(result)]))
     }
 
@@ -2338,7 +2578,11 @@ impl RbxSyncServer {
             path = path_escaped,
         );
 
-        let result = self.client.run_code(&code).await.map_err(|e| mcp_error(e.to_string()))?;
+        let result = self
+            .client
+            .run_code(&code)
+            .await
+            .map_err(|e| mcp_error(e.to_string()))?;
         Ok(CallToolResult::success(vec![Content::text(result)]))
     }
 
@@ -2385,7 +2629,11 @@ impl RbxSyncServer {
             parent_line = parent_line,
         );
 
-        let result = self.client.run_code(&code).await.map_err(|e| mcp_error(e.to_string()))?;
+        let result = self
+            .client
+            .run_code(&code)
+            .await
+            .map_err(|e| mcp_error(e.to_string()))?;
         Ok(CallToolResult::success(vec![Content::text(result)]))
     }
 
@@ -2439,13 +2687,19 @@ return table.concat(lines, "\n")"#,
             props_code = props_code,
         );
 
-        let result = self.client.run_code(&code).await.map_err(|e| mcp_error(e.to_string()))?;
+        let result = self
+            .client
+            .run_code(&code)
+            .await
+            .map_err(|e| mcp_error(e.to_string()))?;
         Ok(CallToolResult::success(vec![Content::text(result)]))
     }
 
     /// Get metadata about a Roblox class including its properties and base class relationships.
     /// Creates a temporary instance to inspect, so only works for classes that can be instantiated.
-    #[tool(description = "Get Roblox class info (properties, base classes) by creating a temporary instance")]
+    #[tool(
+        description = "Get Roblox class info (properties, base classes) by creating a temporary instance"
+    )]
     async fn get_class_info(
         &self,
         Parameters(params): Parameters<GetClassInfoParams>,
@@ -2507,7 +2761,11 @@ return table.concat(lines, "\n")"#,
             class_name = class_escaped,
         );
 
-        let result = self.client.run_code(&code).await.map_err(|e| mcp_error(e.to_string()))?;
+        let result = self
+            .client
+            .run_code(&code)
+            .await
+            .map_err(|e| mcp_error(e.to_string()))?;
         Ok(CallToolResult::success(vec![Content::text(result)]))
     }
 
@@ -2523,7 +2781,8 @@ return table.concat(lines, "\n")"#,
         &self,
         Parameters(params): Parameters<HarnessInitParams>,
     ) -> Result<CallToolResult, McpError> {
-        let result = self.client
+        let result = self
+            .client
             .harness_init(
                 &params.project_dir,
                 &params.game_name,
@@ -2555,7 +2814,8 @@ return table.concat(lines, "\n")"#,
         &self,
         Parameters(params): Parameters<HarnessSessionStartParams>,
     ) -> Result<CallToolResult, McpError> {
-        let result = self.client
+        let result = self
+            .client
             .harness_session_start(&params.project_dir, params.initial_goals.as_deref())
             .await
             .map_err(|e| mcp_error(e.to_string()))?;
@@ -2581,7 +2841,8 @@ return table.concat(lines, "\n")"#,
         &self,
         Parameters(params): Parameters<HarnessSessionEndParams>,
     ) -> Result<CallToolResult, McpError> {
-        let result = self.client
+        let result = self
+            .client
             .harness_session_end(
                 &params.project_dir,
                 &params.session_id,
@@ -2593,7 +2854,7 @@ return table.concat(lines, "\n")"#,
 
         if result.success {
             Ok(CallToolResult::success(vec![Content::text(
-                "Session ended successfully."
+                "Session ended successfully.",
             )]))
         } else {
             Ok(CallToolResult::success(vec![Content::text(format!(
@@ -2611,7 +2872,8 @@ return table.concat(lines, "\n")"#,
         &self,
         Parameters(params): Parameters<HarnessFeatureUpdateParams>,
     ) -> Result<CallToolResult, McpError> {
-        let result = self.client
+        let result = self
+            .client
             .harness_feature_update(
                 &params.project_dir,
                 params.feature_id.as_deref(),
@@ -2643,7 +2905,9 @@ return table.concat(lines, "\n")"#,
     /// Read all properties of an instance at the given path.
     /// Returns className, name, and all serialized properties.
     /// Useful for inspecting instance state without running code.
-    #[tool(description = "Read properties of an instance at a path (e.g., 'Workspace/SpawnLocation')")]
+    #[tool(
+        description = "Read properties of an instance at a path (e.g., 'Workspace/SpawnLocation')"
+    )]
     async fn read_properties(
         &self,
         Parameters(params): Parameters<ReadPropertiesParams>,
@@ -2651,7 +2915,8 @@ return table.concat(lines, "\n")"#,
         if let Some(err) = self.require_connection().await? {
             return Ok(err);
         }
-        let result = self.client
+        let result = self
+            .client
             .read_properties(&params.path)
             .await
             .map_err(|e| mcp_error(e.to_string()))?;
@@ -2682,8 +2947,8 @@ return table.concat(lines, "\n")"#,
             // Show properties
             if let Some(props) = data.get("properties") {
                 output.push("Properties:".to_string());
-                let props_json = serde_json::to_string_pretty(props)
-                    .unwrap_or_else(|_| "{}".to_string());
+                let props_json =
+                    serde_json::to_string_pretty(props).unwrap_or_else(|_| "{}".to_string());
                 output.push(props_json);
             }
 
@@ -2692,8 +2957,8 @@ return table.concat(lines, "\n")"#,
                 if !attrs.as_object().map(|o| o.is_empty()).unwrap_or(true) {
                     output.push(String::new());
                     output.push("Attributes:".to_string());
-                    let attrs_json = serde_json::to_string_pretty(attrs)
-                        .unwrap_or_else(|_| "{}".to_string());
+                    let attrs_json =
+                        serde_json::to_string_pretty(attrs).unwrap_or_else(|_| "{}".to_string());
                     output.push(attrs_json);
                 }
             }
@@ -2707,14 +2972,18 @@ return table.concat(lines, "\n")"#,
             }
         }
 
-        Ok(CallToolResult::success(vec![Content::text(output.join("\n"))]))
+        Ok(CallToolResult::success(vec![Content::text(
+            output.join("\n"),
+        )]))
     }
 
     /// Explore the game hierarchy to discover instances.
     /// Returns a tree of instances with their className, name, and childCount.
     /// Use path to start from a specific location, or omit for top-level services.
     /// Use depth to control how deep to traverse (default 1).
-    #[tool(description = "Explore game hierarchy - returns tree of instances with className and childCount")]
+    #[tool(
+        description = "Explore game hierarchy - returns tree of instances with className and childCount"
+    )]
     async fn explore_hierarchy(
         &self,
         Parameters(params): Parameters<ExploreHierarchyParams>,
@@ -2722,7 +2991,8 @@ return table.concat(lines, "\n")"#,
         if let Some(err) = self.require_connection().await? {
             return Ok(err);
         }
-        let result = self.client
+        let result = self
+            .client
             .explore_hierarchy(params.path.as_deref(), params.depth)
             .await
             .map_err(|e| mcp_error(e.to_string()))?;
@@ -2740,7 +3010,10 @@ return table.concat(lines, "\n")"#,
             let prefix = "  ".repeat(indent);
 
             let name = node.get("name").and_then(|v| v.as_str()).unwrap_or("?");
-            let class_name = node.get("className").and_then(|v| v.as_str()).unwrap_or("?");
+            let class_name = node
+                .get("className")
+                .and_then(|v| v.as_str())
+                .unwrap_or("?");
             let child_count = node.get("childCount").and_then(|v| v.as_u64()).unwrap_or(0);
 
             let children = node.get("children").and_then(|v| v.as_array());
@@ -2749,14 +3022,20 @@ return table.concat(lines, "\n")"#,
                 if children.is_empty() {
                     lines.push(format!("{}{} [{}]", prefix, name, class_name));
                 } else {
-                    lines.push(format!("{}{} [{}] ({} children)", prefix, name, class_name, child_count));
+                    lines.push(format!(
+                        "{}{} [{}] ({} children)",
+                        prefix, name, class_name, child_count
+                    ));
                     for child in children {
                         lines.push(format_node(child, indent + 1));
                     }
                 }
             } else if child_count > 0 {
                 // Has children but not expanded (depth limit reached)
-                lines.push(format!("{}{} [{}] ({} children...)", prefix, name, class_name, child_count));
+                lines.push(format!(
+                    "{}{} [{}] ({} children...)",
+                    prefix, name, class_name, child_count
+                ));
             } else {
                 lines.push(format!("{}{} [{}]", prefix, name, class_name));
             }
@@ -2782,7 +3061,9 @@ return table.concat(lines, "\n")"#,
             output.push("No instances found.".to_string());
         }
 
-        Ok(CallToolResult::success(vec![Content::text(output.join("\n"))]))
+        Ok(CallToolResult::success(vec![Content::text(
+            output.join("\n"),
+        )]))
     }
 
     /// Find instances matching search criteria.
@@ -2799,11 +3080,12 @@ return table.concat(lines, "\n")"#,
         // Require at least one filter
         if params.class_name.is_none() && params.name.is_none() && params.parent.is_none() {
             return Ok(CallToolResult::success(vec![Content::text(
-                "Error: At least one filter (className, name, or parent) is required."
+                "Error: At least one filter (className, name, or parent) is required.",
             )]));
         }
 
-        let result = self.client
+        let result = self
+            .client
             .find_instances(
                 params.class_name.as_deref(),
                 params.name.as_deref(),
@@ -2826,20 +3108,30 @@ return table.concat(lines, "\n")"#,
         if let Some(data) = &result.data {
             if let Some(instances) = data.get("instances").and_then(|v| v.as_array()) {
                 let total = data.get("total").and_then(|v| v.as_u64()).unwrap_or(0);
-                let limited = data.get("limited").and_then(|v| v.as_bool()).unwrap_or(false);
+                let limited = data
+                    .get("limited")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
 
                 if instances.is_empty() {
                     output.push("No instances found matching criteria.".to_string());
                 } else {
                     if limited {
-                        output.push(format!("Found {} instances (showing first {}):", total, instances.len()));
+                        output.push(format!(
+                            "Found {} instances (showing first {}):",
+                            total,
+                            instances.len()
+                        ));
                     } else {
                         output.push(format!("Found {} instances:", instances.len()));
                     }
                     output.push(String::new());
 
                     for inst in instances {
-                        let class_name = inst.get("className").and_then(|v| v.as_str()).unwrap_or("?");
+                        let class_name = inst
+                            .get("className")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("?");
                         let path = inst.get("path").and_then(|v| v.as_str()).unwrap_or("?");
                         output.push(format!("  {} [{}]", path, class_name));
                     }
@@ -2851,7 +3143,9 @@ return table.concat(lines, "\n")"#,
             output.push("No data returned.".to_string());
         }
 
-        Ok(CallToolResult::success(vec![Content::text(output.join("\n"))]))
+        Ok(CallToolResult::success(vec![Content::text(
+            output.join("\n"),
+        )]))
     }
 
     /// Insert a model from the Roblox marketplace into the game.
@@ -2865,7 +3159,8 @@ return table.concat(lines, "\n")"#,
         if let Some(err) = self.require_connection().await? {
             return Ok(err);
         }
-        let result = self.client
+        let result = self
+            .client
             .insert_model(params.asset_id, params.parent.as_deref())
             .await
             .map_err(|e| mcp_error(e.to_string()))?;
@@ -2877,8 +3172,12 @@ return table.concat(lines, "\n")"#,
             ))]));
         }
 
-        let inserted_name = result.inserted_name.unwrap_or_else(|| "Unknown".to_string());
-        let inserted_path = result.inserted_path.unwrap_or_else(|| "Unknown".to_string());
+        let inserted_name = result
+            .inserted_name
+            .unwrap_or_else(|| "Unknown".to_string());
+        let inserted_path = result
+            .inserted_path
+            .unwrap_or_else(|| "Unknown".to_string());
         let class_name = result.class_name.unwrap_or_else(|| "Unknown".to_string());
 
         Ok(CallToolResult::success(vec![Content::text(format!(
@@ -2894,14 +3193,15 @@ return table.concat(lines, "\n")"#,
         &self,
         Parameters(params): Parameters<HarnessStatusParams>,
     ) -> Result<CallToolResult, McpError> {
-        let result = self.client
+        let result = self
+            .client
             .harness_status(&params.project_dir)
             .await
             .map_err(|e| mcp_error(e.to_string()))?;
 
         if !result.initialized {
             return Ok(CallToolResult::success(vec![Content::text(
-                "Harness not initialized. Use harness_init to set up the project."
+                "Harness not initialized. Use harness_init to set up the project.",
             )]));
         }
 
@@ -2909,7 +3209,10 @@ return table.concat(lines, "\n")"#,
 
         // Game info
         if let Some(game) = &result.game {
-            let name = game.get("name").and_then(|v| v.as_str()).unwrap_or("Unknown");
+            let name = game
+                .get("name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("Unknown");
             output.push(format!("\nGame: {}", name));
             if let Some(desc) = game.get("description").and_then(|v| v.as_str()) {
                 if !desc.is_empty() {
@@ -2930,8 +3233,14 @@ return table.concat(lines, "\n")"#,
             output.push("\nFeature List:".to_string());
             for feature in &result.features {
                 let id = feature.get("id").and_then(|v| v.as_str()).unwrap_or("?");
-                let name = feature.get("name").and_then(|v| v.as_str()).unwrap_or("Unnamed");
-                let status = feature.get("status").and_then(|v| v.as_str()).unwrap_or("unknown");
+                let name = feature
+                    .get("name")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("Unnamed");
+                let status = feature
+                    .get("status")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("unknown");
                 output.push(format!("  - [{}] {} ({})", id, name, status));
             }
         }
@@ -2940,7 +3249,11 @@ return table.concat(lines, "\n")"#,
         if !result.recent_sessions.is_empty() {
             output.push("\nRecent Sessions:".to_string());
             for session in &result.recent_sessions {
-                let status = if session.ended_at.is_some() { "ended" } else { "active" };
+                let status = if session.ended_at.is_some() {
+                    "ended"
+                } else {
+                    "active"
+                };
                 output.push(format!(
                     "  - {} ({}, {} features)",
                     session.id, status, session.features_count
@@ -2951,12 +3264,16 @@ return table.concat(lines, "\n")"#,
             }
         }
 
-        Ok(CallToolResult::success(vec![Content::text(output.join("\n"))]))
+        Ok(CallToolResult::success(vec![Content::text(
+            output.join("\n"),
+        )]))
     }
 
     /// Verify game state during playtest. Check properties, counts, distances, backpack items, leaderstats.
     /// Supports timeout for 'eventually true' conditions.
-    #[tool(description = "Verify game state during playtest. Check properties, counts, distances, backpack items, leaderstats. Supports timeout for 'eventually true' conditions.")]
+    #[tool(
+        description = "Verify game state during playtest. Check properties, counts, distances, backpack items, leaderstats. Supports timeout for 'eventually true' conditions."
+    )]
     async fn verify(
         &self,
         Parameters(params): Parameters<VerifyParams>,
@@ -3009,22 +3326,36 @@ return table.concat(lines, "\n")"#,
         // Resolve session_id via place targeting
         let resolved_place = self.resolve_place_id(None).await;
         let session_id = if let Some(pid) = resolved_place {
-            self.client.resolve_session_for_place(pid).await.ok().flatten()
+            self.client
+                .resolve_session_for_place(pid)
+                .await
+                .ok()
+                .flatten()
         } else {
             None
         };
 
-        let result = self.client
+        let result = self
+            .client
             .send_verify(check_data, session_id.as_deref())
             .await
             .map_err(|e| mcp_error(e.to_string()))?;
 
         // Format result as PASS/FAIL
-        let success = result.get("success").and_then(|v| v.as_bool()).unwrap_or(false);
+        let success = result
+            .get("success")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
         let data = result.get("data").cloned().unwrap_or(serde_json::json!({}));
-        let error = result.get("error").and_then(|v| v.as_str()).map(|s| s.to_string());
+        let error = result
+            .get("error")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
 
-        let msg = data.get("message").and_then(|v| v.as_str()).unwrap_or("(no message)");
+        let msg = data
+            .get("message")
+            .and_then(|v| v.as_str())
+            .unwrap_or("(no message)");
         let elapsed = data.get("elapsed").and_then(|v| v.as_f64()).unwrap_or(0.0);
 
         let mut output = if success {
@@ -3077,7 +3408,10 @@ async fn main() -> anyhow::Result<()> {
 
     // Set up logging to stderr (stdio is for MCP protocol)
     // When --debug or RBXSYNC_DEBUG=1 is set, enable debug-level tracing
-    let default_filter = if std::env::var("RBXSYNC_DEBUG").map(|v| v == "1" || v.to_lowercase() == "true").unwrap_or(false) {
+    let default_filter = if std::env::var("RBXSYNC_DEBUG")
+        .map(|v| v == "1" || v.to_lowercase() == "true")
+        .unwrap_or(false)
+    {
         "debug"
     } else {
         "info"
@@ -3091,12 +3425,15 @@ async fn main() -> anyhow::Result<()> {
         )
         .with(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(default_filter))
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(default_filter)),
         )
         .init();
 
     tracing::info!("Starting RbxSync MCP server...");
-    if std::env::var("RBXSYNC_DEBUG").map(|v| v == "1").unwrap_or(false) {
+    if std::env::var("RBXSYNC_DEBUG")
+        .map(|v| v == "1")
+        .unwrap_or(false)
+    {
         tracing::info!("Debug mode enabled (RBXSYNC_DEBUG=1)");
     }
 

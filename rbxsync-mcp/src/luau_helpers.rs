@@ -237,34 +237,19 @@ mod tests {
 
     #[test]
     fn test_bool_to_luau() {
-        assert_eq!(
-            json_value_to_luau(&serde_json::Value::Bool(true)),
-            "true"
-        );
-        assert_eq!(
-            json_value_to_luau(&serde_json::Value::Bool(false)),
-            "false"
-        );
+        assert_eq!(json_value_to_luau(&serde_json::Value::Bool(true)), "true");
+        assert_eq!(json_value_to_luau(&serde_json::Value::Bool(false)), "false");
     }
 
     #[test]
     fn test_number_to_luau() {
-        assert_eq!(
-            json_value_to_luau(&serde_json::json!(42)),
-            "42"
-        );
-        assert_eq!(
-            json_value_to_luau(&serde_json::json!(3.14)),
-            "3.14"
-        );
+        assert_eq!(json_value_to_luau(&serde_json::json!(42)), "42");
+        assert_eq!(json_value_to_luau(&serde_json::json!(3.14)), "3.14");
     }
 
     #[test]
     fn test_string_to_luau() {
-        assert_eq!(
-            json_value_to_luau(&serde_json::json!("hello")),
-            "\"hello\""
-        );
+        assert_eq!(json_value_to_luau(&serde_json::json!("hello")), "\"hello\"");
     }
 
     #[test]

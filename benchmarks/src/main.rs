@@ -68,25 +68,47 @@ where
     let mean_ms = times_ms.iter().sum::<f64>() / times_ms.len() as f64;
     let min_ms = times_ms.iter().cloned().fold(f64::INFINITY, f64::min);
     let max_ms = times_ms.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
-    let variance = times_ms.iter().map(|t| (t - mean_ms).powi(2)).sum::<f64>() / times_ms.len() as f64;
+    let variance =
+        times_ms.iter().map(|t| (t - mean_ms).powi(2)).sum::<f64>() / times_ms.len() as f64;
     let std_dev_ms = variance.sqrt();
 
-    BenchmarkResult { name: name.to_string(), category: category.to_string(), iterations, mean_ms, min_ms, max_ms, std_dev_ms, throughput: None }
+    BenchmarkResult {
+        name: name.to_string(),
+        category: category.to_string(),
+        iterations,
+        mean_ms,
+        min_ms,
+        max_ms,
+        std_dev_ms,
+        throughput: None,
+    }
 }
 
-pub fn run_benchmark_with_throughput<F>(name: &str, category: &str, iterations: u32, bytes: u64, f: F) -> BenchmarkResult
+pub fn run_benchmark_with_throughput<F>(
+    name: &str,
+    category: &str,
+    iterations: u32,
+    bytes: u64,
+    f: F,
+) -> BenchmarkResult
 where
     F: FnMut(),
 {
     let mut result = run_benchmark(name, category, iterations, f);
     let bytes_per_sec = (bytes as f64 * 1000.0) / result.mean_ms;
-    result.throughput = Some(Throughput { value: bytes_per_sec / (1024.0 * 1024.0), unit: "MB/s".to_string() });
+    result.throughput = Some(Throughput {
+        value: bytes_per_sec / (1024.0 * 1024.0),
+        unit: "MB/s".to_string(),
+    });
     result
 }
 
 fn print_report(report: &BenchmarkReport) {
     println!("\n======== RbxSync Benchmark Report ========");
-    println!("Version: {} | {} ({})", report.version, report.system_info.os, report.system_info.arch);
+    println!(
+        "Version: {} | {} ({})",
+        report.version, report.system_info.os, report.system_info.arch
+    );
     println!();
     let mut current_cat = String::new();
     for r in &report.results {
@@ -94,7 +116,10 @@ fn print_report(report: &BenchmarkReport) {
             current_cat = r.category.clone();
             println!("--- {} ---", current_cat);
         }
-        print!("  {:<40} {:>8.3}ms (±{:.3})", r.name, r.mean_ms, r.std_dev_ms);
+        print!(
+            "  {:<40} {:>8.3}ms (±{:.3})",
+            r.name, r.mean_ms, r.std_dev_ms
+        );
         if let Some(ref tp) = r.throughput {
             print!(" [{:.2} {}]", tp.value, tp.unit);
         }
@@ -119,7 +144,8 @@ fn main() -> Result<()> {
     println!("Instance tree benchmarks...");
     results.extend(benchmarks::instance_tree::run_all());
 
-    let mut categories: std::collections::HashMap<String, (usize, f64)> = std::collections::HashMap::new();
+    let mut categories: std::collections::HashMap<String, (usize, f64)> =
+        std::collections::HashMap::new();
     for r in &results {
         let e = categories.entry(r.category.clone()).or_insert((0, 0.0));
         e.0 += 1;
@@ -127,13 +153,25 @@ fn main() -> Result<()> {
     }
 
     let report = BenchmarkReport {
-        timestamp: chrono::Utc::now().format("%Y-%m-%d %H:%M:%S UTC").to_string(),
+        timestamp: chrono::Utc::now()
+            .format("%Y-%m-%d %H:%M:%S UTC")
+            .to_string(),
         version: env!("CARGO_PKG_VERSION").to_string(),
-        system_info: SystemInfo { os: std::env::consts::OS.to_string(), arch: std::env::consts::ARCH.to_string() },
+        system_info: SystemInfo {
+            os: std::env::consts::OS.to_string(),
+            arch: std::env::consts::ARCH.to_string(),
+        },
         results,
         summary: BenchmarkSummary {
             total_benchmarks: categories.values().map(|c| c.0).sum(),
-            categories: categories.into_iter().map(|(n, (c, t))| CategorySummary { name: n, benchmark_count: c, total_time_ms: t }).collect(),
+            categories: categories
+                .into_iter()
+                .map(|(n, (c, t))| CategorySummary {
+                    name: n,
+                    benchmark_count: c,
+                    total_time_ms: t,
+                })
+                .collect(),
         },
     };
 
@@ -143,7 +181,10 @@ fn main() -> Result<()> {
         print_report(&report);
         fs::create_dir_all("benchmarks/results")?;
         let ts = chrono::Utc::now().format("%Y%m%d_%H%M%S").to_string();
-        fs::write(format!("benchmarks/results/benchmark-{}.json", ts), serde_json::to_string_pretty(&report)?)?;
+        fs::write(
+            format!("benchmarks/results/benchmark-{}.json", ts),
+            serde_json::to_string_pretty(&report)?,
+        )?;
         println!("\nResults saved to benchmarks/results/");
     }
     Ok(())

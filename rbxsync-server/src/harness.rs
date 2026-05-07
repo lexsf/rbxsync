@@ -5,15 +5,10 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use axum::{
-    extract::State,
-    http::StatusCode,
-    response::IntoResponse,
-    Json,
-};
+use axum::{extract::State, http::StatusCode, response::IntoResponse, Json};
 use rbxsync_core::{
-    Feature, FeaturePriority, FeatureStatus, FeaturesFile, GameDefinition,
-    SessionLog, SessionLogEntry,
+    Feature, FeaturePriority, FeatureStatus, FeaturesFile, GameDefinition, SessionLog,
+    SessionLogEntry,
 };
 use serde::{Deserialize, Serialize};
 
@@ -218,39 +213,51 @@ pub async fn handle_harness_init(
     }
 
     // Load template features if specified
-    let (features, template_applied, features_count) = if let Some(ref template_name) = req.template {
+    let (features, template_applied, features_count) = if let Some(ref template_name) = req.template
+    {
         match get_template(template_name) {
             Some(template_content) => {
                 match serde_yaml::from_str::<GameTemplate>(template_content) {
                     Ok(template) => {
                         let timestamp = current_timestamp();
-                        let features: Vec<Feature> = template.features.into_iter().map(|tf| {
-                            Feature {
-                                name: tf.name,
-                                description: tf.description,
-                                priority: tf.priority.into(),
-                                tags: tf.tags,
-                                acceptance_criteria: tf.acceptance_criteria,
-                                complexity: tf.complexity,
-                                created_at: Some(timestamp.clone()),
-                                // Dependencies stored as names in template notes
-                                notes: if tf.dependencies.is_empty() {
-                                    vec![]
-                                } else {
-                                    vec![format!("Depends on: {}", tf.dependencies.join(", "))]
-                                },
-                                ..Default::default()
-                            }
-                        }).collect();
+                        let features: Vec<Feature> = template
+                            .features
+                            .into_iter()
+                            .map(|tf| {
+                                Feature {
+                                    name: tf.name,
+                                    description: tf.description,
+                                    priority: tf.priority.into(),
+                                    tags: tf.tags,
+                                    acceptance_criteria: tf.acceptance_criteria,
+                                    complexity: tf.complexity,
+                                    created_at: Some(timestamp.clone()),
+                                    // Dependencies stored as names in template notes
+                                    notes: if tf.dependencies.is_empty() {
+                                        vec![]
+                                    } else {
+                                        vec![format!("Depends on: {}", tf.dependencies.join(", "))]
+                                    },
+                                    ..Default::default()
+                                }
+                            })
+                            .collect();
                         let count = features.len();
-                        (FeaturesFile { features }, Some(template_name.clone()), Some(count))
+                        (
+                            FeaturesFile { features },
+                            Some(template_name.clone()),
+                            Some(count),
+                        )
                     }
                     Err(e) => {
                         return (
                             StatusCode::BAD_REQUEST,
                             Json(HarnessInitResponse {
                                 success: false,
-                                message: format!("Failed to parse template '{}': {}", template_name, e),
+                                message: format!(
+                                    "Failed to parse template '{}': {}",
+                                    template_name, e
+                                ),
                                 harness_dir: harness_dir.to_string_lossy().to_string(),
                                 game_id: Some(game_id),
                                 template_applied: None,
@@ -484,10 +491,16 @@ pub async fn handle_session_end(
     State(_state): State<Arc<AppState>>,
     Json(req): Json<SessionEndRequest>,
 ) -> impl IntoResponse {
-    tracing::info!("Ending session {} for project: {}", req.session_id, req.project_dir);
+    tracing::info!(
+        "Ending session {} for project: {}",
+        req.session_id,
+        req.project_dir
+    );
 
     let harness_dir = get_harness_dir(&req.project_dir);
-    let session_path = harness_dir.join("sessions").join(format!("{}.yaml", req.session_id));
+    let session_path = harness_dir
+        .join("sessions")
+        .join(format!("{}.yaml", req.session_id));
 
     // Read existing session
     let session_content = match std::fs::read_to_string(&session_path) {
@@ -682,7 +695,11 @@ pub async fn handle_feature_update(
         feature_id = existing_id.clone();
         is_new = false;
 
-        if let Some(feature) = features_file.features.iter_mut().find(|f| f.id == existing_id) {
+        if let Some(feature) = features_file
+            .features
+            .iter_mut()
+            .find(|f| f.id == existing_id)
+        {
             // Apply updates
             if let Some(name) = req.name {
                 feature.name = name;
@@ -944,7 +961,12 @@ pub async fn handle_harness_status(
         if let Ok(entries) = std::fs::read_dir(&sessions_dir) {
             let mut session_files: Vec<_> = entries
                 .filter_map(|e| e.ok())
-                .filter(|e| e.path().extension().map(|ext| ext == "yaml").unwrap_or(false))
+                .filter(|e| {
+                    e.path()
+                        .extension()
+                        .map(|ext| ext == "yaml")
+                        .unwrap_or(false)
+                })
                 .collect();
 
             // Sort by modification time (newest first)

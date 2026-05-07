@@ -16,7 +16,10 @@ fn file_io_benchmarks(c: &mut Criterion) {
     group.bench_function("write_small_file_1kb", |b| {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("test.luau");
-        b.iter(|| { fs::write(&path, &small).unwrap(); black_box(()) })
+        b.iter(|| {
+            fs::write(&path, &small).unwrap();
+            black_box(())
+        })
     });
 
     let large = generate_content(100 * 1024);
@@ -24,14 +27,21 @@ fn file_io_benchmarks(c: &mut Criterion) {
     group.bench_function("write_large_file_100kb", |b| {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("test.luau");
-        b.iter(|| { fs::write(&path, &large).unwrap(); black_box(()) })
+        b.iter(|| {
+            fs::write(&path, &large).unwrap();
+            black_box(())
+        })
     });
 
     group.bench_function("write_batch_100_files", |b| {
         let dir = TempDir::new().unwrap();
-        let files: Vec<_> = (0..100).map(|i| (format!("s_{}.luau", i), generate_content(1024))).collect();
+        let files: Vec<_> = (0..100)
+            .map(|i| (format!("s_{}.luau", i), generate_content(1024)))
+            .collect();
         b.iter(|| {
-            for (n, c) in &files { fs::write(dir.path().join(n), c).unwrap(); }
+            for (n, c) in &files {
+                fs::write(dir.path().join(n), c).unwrap();
+            }
             black_box(())
         })
     });
