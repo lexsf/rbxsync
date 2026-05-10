@@ -3,8 +3,6 @@
 //! Command-line interface for Roblox game extraction and synchronization.
 
 use std::collections::{BTreeMap, HashSet};
-use std::fs::File;
-use std::io::BufWriter;
 use std::path::PathBuf;
 use std::sync::mpsc::channel;
 use std::time::Duration;
@@ -12,13 +10,11 @@ use std::time::Duration;
 use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
 use notify::{Config, RecommendedWatcher, RecursiveMode, Watcher};
-use rbx_dom_weak::types::Variant;
-use rbx_dom_weak::{InstanceBuilder, WeakDom};
 use rbxsync_core::{
-    build_plugin, find_existing_rbxsync_plugin, find_rojo_project, get_studio_plugins_folder,
-    import_place_file, install_plugin, parse_rojo_project, rojo_to_tree_mapping,
-    write_serialized_instances, ExtractWriterOptions, PlaceImportOptions, PluginBuildConfig,
-    ProjectConfig,
+    build_plugin, export_place, find_existing_rbxsync_plugin, find_rojo_project,
+    get_studio_plugins_folder, import_place_file, install_plugin, parse_rojo_project,
+    rojo_to_tree_mapping, write_serialized_instances, ExtractWriterOptions, PlaceExportFormat,
+    PlaceExportOptions, PlaceImportOptions, PluginBuildConfig, ProjectConfig,
 };
 use rbxsync_server::{run_server, ServerConfig};
 
@@ -2509,18 +2505,8 @@ async fn cmd_build(
         bail!("Source directory not found: {}", src_dir.display());
     }
 
-    // Parse format and determine if XML
-    let format = format.to_lowercase();
-    let (extension, is_xml) = match format.as_str() {
-        "rbxl" | "place" => ("rbxl", false),
-        "rbxm" | "model" => ("rbxm", false),
-        "rbxlx" | "place-xml" => ("rbxlx", true),
-        "rbxmx" | "model-xml" => ("rbxmx", true),
-        _ => bail!(
-            "Unknown format: {}. Use rbxl, rbxm, rbxlx, or rbxmx",
-            format
-        ),
-    };
+    let format = PlaceExportFormat::from_build_format(&format)?;
+    let extension = format.extension();
 
     // Determine output path
     let output_path = if let Some(plugin_name) = &plugin {
@@ -2537,7 +2523,7 @@ async fn cmd_build(
     };
 
     // Initial build
-    do_build(&src_dir, &output_path, extension, is_xml)?;
+    do_build(&project_dir, &src_dir, &output_path, format)?;
 
     // If not watch mode, we're done
     if !watch {
@@ -2573,7 +2559,7 @@ async fn cmd_build(
                 // Debounce: only rebuild if enough time has passed
                 if last_build.elapsed() >= debounce {
                     println!("\nChange detected, rebuilding...");
-                    match do_build(&src_dir, &output_path, extension, is_xml) {
+                    match do_build(&project_dir, &src_dir, &output_path, format) {
                         Ok(()) => last_build = std::time::Instant::now(),
                         Err(e) => println!("Build error: {}", e),
                     }
@@ -2593,36 +2579,26 @@ async fn cmd_build(
 }
 
 /// Perform the actual build operation
-fn do_build(src_dir: &PathBuf, output_path: &PathBuf, extension: &str, is_xml: bool) -> Result<()> {
-    let is_place = extension == "rbxl" || extension == "rbxlx";
+fn do_build(
+    project_dir: &PathBuf,
+    src_dir: &PathBuf,
+    output_path: &PathBuf,
+    format: PlaceExportFormat,
+) -> Result<()> {
+    println!("Building {} from {:?}...", format.extension(), src_dir);
 
-    println!("Building {} from {:?}...", extension, src_dir);
-
-    // Build the DOM
-    let dom = build_dom_from_src(src_dir, is_place)?;
-
-    // Ensure output directory exists
-    if let Some(parent) = output_path.parent() {
-        std::fs::create_dir_all(parent).context("Failed to create output directory")?;
-    }
-
-    // Write to file
-    let output_file =
-        BufWriter::new(File::create(output_path).context("Failed to create output file")?);
-
-    // Export the children (services/instances) directly, not the root wrapper
-    // For places: services should have null parent referent (top-level in file)
-    // For models: instances should be top-level items
-    // The rbx_binary crate handles service detection based on class names
-    let refs_to_export: Vec<_> = dom.root().children().to_vec();
-
-    if is_xml {
-        rbx_xml::to_writer_default(output_file, &dom, &refs_to_export)
-            .context("Failed to write XML output file")?;
-    } else {
-        rbx_binary::to_writer(output_file, &dom, &refs_to_export)
-            .context("Failed to write binary output file")?;
-    }
+    export_place(PlaceExportOptions {
+        project_dir: project_dir.clone(),
+        source_dir: src_dir.clone(),
+        output_path: output_path.clone(),
+        format,
+        force: true,
+        dry_run: false,
+        strict: false,
+        services: None,
+        include_packages: true,
+        tree_mapping: Default::default(),
+    })?;
 
     println!("Built successfully: {}", output_path.display());
 
@@ -2632,457 +2608,6 @@ fn do_build(src_dir: &PathBuf, output_path: &PathBuf, extension: &str, is_xml: b
     }
 
     Ok(())
-}
-
-/// Build a DOM from the src directory
-fn build_dom_from_src(src_dir: &std::path::Path, is_place: bool) -> Result<WeakDom> {
-    let root_class = if is_place { "DataModel" } else { "Folder" };
-    let root_name = if is_place { "game" } else { "Model" };
-
-    let mut dom = WeakDom::new(InstanceBuilder::new(root_class).with_name(root_name));
-    let root_ref = dom.root_ref();
-
-    // Process each service directory
-    let mut entries: Vec<_> = std::fs::read_dir(src_dir)
-        .context("Failed to read src directory")?
-        .filter_map(|e| e.ok())
-        .collect();
-
-    entries.sort_by_key(|a| a.file_name());
-
-    for entry in entries {
-        let entry_path = entry.path();
-        let entry_name = entry.file_name().to_string_lossy().to_string();
-
-        if entry_path.is_dir() {
-            // Directory becomes a service or folder
-            let class_name = service_class_name(&entry_name);
-            let service_ref = dom.insert(
-                root_ref,
-                InstanceBuilder::new(class_name).with_name(&entry_name),
-            );
-
-            // Recursively add children
-            build_dom_children(&mut dom, service_ref, &entry_path)?;
-        } else if entry_path
-            .extension()
-            .map(|e| e == "rbxjson")
-            .unwrap_or(false)
-        {
-            // .rbxjson file becomes an instance
-            let instance_name = entry_path
-                .file_stem()
-                .map(|s| s.to_string_lossy().to_string())
-                .unwrap_or_default();
-
-            if let Ok(content) = std::fs::read_to_string(&entry_path) {
-                if let Ok(json) = serde_json::from_str::<serde_json::Value>(&content) {
-                    let class_name = json
-                        .get("className")
-                        .and_then(|c| c.as_str())
-                        .unwrap_or("Folder");
-
-                    let mut builder = InstanceBuilder::new(class_name).with_name(&instance_name);
-
-                    // Add properties from JSON
-                    if let Some(props) = json.get("properties").and_then(|p| p.as_object()) {
-                        for (prop_name, prop_value) in props {
-                            if let Some(value) = json_to_variant(prop_value) {
-                                builder = builder.with_property(prop_name, value);
-                            }
-                        }
-                    }
-
-                    dom.insert(root_ref, builder);
-                }
-            }
-        } else if entry_path
-            .extension()
-            .map(|e| e == "luau" || e == "lua")
-            .unwrap_or(false)
-        {
-            // Script file
-            let (script_name, class_name) = parse_script_name(&entry_name);
-            if let Ok(source) = std::fs::read_to_string(&entry_path) {
-                dom.insert(
-                    root_ref,
-                    InstanceBuilder::new(class_name)
-                        .with_name(&script_name)
-                        .with_property("Source", Variant::String(source)),
-                );
-            }
-        }
-    }
-
-    Ok(dom)
-}
-
-/// Recursively build DOM children from a directory
-fn build_dom_children(
-    dom: &mut WeakDom,
-    parent_ref: rbx_dom_weak::types::Ref,
-    dir_path: &std::path::Path,
-) -> Result<()> {
-    let mut entries: Vec<_> = std::fs::read_dir(dir_path)
-        .context("Failed to read directory")?
-        .filter_map(|e| e.ok())
-        .collect();
-
-    entries.sort_by_key(|a| a.file_name());
-
-    // Check for init file first
-    let init_files = ["init.luau", "init.server.luau", "init.client.luau"];
-    for init_name in init_files {
-        let init_path = dir_path.join(init_name);
-        if init_path.exists() {
-            if let Ok(source) = std::fs::read_to_string(&init_path) {
-                // Set Source property on parent
-                if let Some(instance) = dom.get_by_ref_mut(parent_ref) {
-                    instance
-                        .properties
-                        .insert("Source".to_string(), Variant::String(source));
-                }
-            }
-            break;
-        }
-    }
-
-    for entry in entries {
-        let entry_path = entry.path();
-        let entry_name = entry.file_name().to_string_lossy().to_string();
-
-        // Skip init files and _meta.rbxjson
-        if init_files.iter().any(|&n| entry_name == n) || entry_name == "_meta.rbxjson" {
-            continue;
-        }
-
-        if entry_path.is_dir() {
-            // Check if directory has _meta.rbxjson (contains class and properties)
-            let meta_path = entry_path.join("_meta.rbxjson");
-            let meta_data: Option<serde_json::Value> = if meta_path.exists() {
-                std::fs::read_to_string(&meta_path)
-                    .ok()
-                    .and_then(|s| serde_json::from_str(&s).ok())
-            } else {
-                None
-            };
-
-            // Check if directory has init file (makes it a script)
-            let has_init = init_files.iter().any(|&n| entry_path.join(n).exists());
-
-            let class_name = if has_init {
-                if entry_path.join("init.server.luau").exists() {
-                    "Script"
-                } else if entry_path.join("init.client.luau").exists() {
-                    "LocalScript"
-                } else {
-                    "ModuleScript"
-                }
-            } else if let Some(ref meta) = meta_data {
-                // Use class from _meta.rbxjson if available
-                meta.get("className")
-                    .and_then(|c| c.as_str())
-                    .unwrap_or("Folder")
-            } else {
-                "Folder"
-            };
-
-            let mut builder = InstanceBuilder::new(class_name).with_name(&entry_name);
-
-            // Apply properties from _meta.rbxjson if available
-            if let Some(ref meta) = meta_data {
-                if let Some(props) = meta.get("properties").and_then(|p| p.as_object()) {
-                    for (prop_name, prop_value) in props {
-                        if let Some(value) = json_to_variant(prop_value) {
-                            builder = builder.with_property(prop_name, value);
-                        }
-                    }
-                }
-            }
-
-            let child_ref = dom.insert(parent_ref, builder);
-
-            build_dom_children(dom, child_ref, &entry_path)?;
-        } else if entry_path
-            .extension()
-            .map(|e| e == "rbxjson")
-            .unwrap_or(false)
-        {
-            // .rbxjson file
-            let instance_name = entry_path
-                .file_stem()
-                .map(|s| s.to_string_lossy().to_string())
-                .unwrap_or_default();
-
-            if let Ok(content) = std::fs::read_to_string(&entry_path) {
-                if let Ok(json) = serde_json::from_str::<serde_json::Value>(&content) {
-                    let class_name = json
-                        .get("className")
-                        .and_then(|c| c.as_str())
-                        .unwrap_or("Folder");
-
-                    let mut builder = InstanceBuilder::new(class_name).with_name(&instance_name);
-
-                    if let Some(props) = json.get("properties").and_then(|p| p.as_object()) {
-                        for (prop_name, prop_value) in props {
-                            if let Some(value) = json_to_variant(prop_value) {
-                                builder = builder.with_property(prop_name, value);
-                            }
-                        }
-                    }
-
-                    dom.insert(parent_ref, builder);
-                }
-            }
-        } else if entry_path
-            .extension()
-            .map(|e| e == "luau" || e == "lua")
-            .unwrap_or(false)
-        {
-            // Script file
-            let (script_name, class_name) = parse_script_name(&entry_name);
-            if let Ok(source) = std::fs::read_to_string(&entry_path) {
-                dom.insert(
-                    parent_ref,
-                    InstanceBuilder::new(class_name)
-                        .with_name(&script_name)
-                        .with_property("Source", Variant::String(source)),
-                );
-            }
-        }
-    }
-
-    Ok(())
-}
-
-/// Get the appropriate class name for a service directory
-fn service_class_name(name: &str) -> &'static str {
-    match name {
-        "Workspace" => "Workspace",
-        "ReplicatedStorage" => "ReplicatedStorage",
-        "ReplicatedFirst" => "ReplicatedFirst",
-        "ServerScriptService" => "ServerScriptService",
-        "ServerStorage" => "ServerStorage",
-        "StarterGui" => "StarterGui",
-        "StarterPack" => "StarterPack",
-        "StarterPlayer" => "StarterPlayer",
-        "Lighting" => "Lighting",
-        "SoundService" => "SoundService",
-        "Chat" => "Chat",
-        "Teams" => "Teams",
-        "TestService" => "TestService",
-        "Players" => "Players",
-        _ => "Folder",
-    }
-}
-
-/// Convert JSON property value to rbx_dom Variant
-fn json_to_variant(value: &serde_json::Value) -> Option<Variant> {
-    use rbx_dom_weak::types::*;
-
-    // Check if it has a type field (our format)
-    if let Some(obj) = value.as_object() {
-        if let Some(type_str) = obj.get("type").and_then(|t| t.as_str()) {
-            let val = obj.get("value");
-            return match type_str {
-                // Basic types
-                "string" => val?.as_str().map(|s| Variant::String(s.to_string())),
-                "int" | "int32" => val?.as_i64().map(|n| Variant::Int32(n as i32)),
-                "int64" => val?.as_i64().map(Variant::Int64),
-                "float" | "float32" => val?.as_f64().map(|n| Variant::Float32(n as f32)),
-                "float64" | "double" => val?.as_f64().map(Variant::Float64),
-                "bool" => val?.as_bool().map(Variant::Bool),
-
-                // nil means "use default" - skip the property entirely
-                "nil" => None,
-
-                // Vector types
-                "Vector2" => {
-                    let v = val?.as_object()?;
-                    Some(Variant::Vector2(Vector2::new(
-                        v.get("x")?.as_f64()? as f32,
-                        v.get("y")?.as_f64()? as f32,
-                    )))
-                }
-                "Vector3" => {
-                    let v = val?.as_object()?;
-                    Some(Variant::Vector3(Vector3::new(
-                        v.get("x")?.as_f64()? as f32,
-                        v.get("y")?.as_f64()? as f32,
-                        v.get("z")?.as_f64()? as f32,
-                    )))
-                }
-
-                // Color types
-                "Color3" => {
-                    let v = val?.as_object()?;
-                    Some(Variant::Color3(Color3::new(
-                        v.get("r")?.as_f64()? as f32,
-                        v.get("g")?.as_f64()? as f32,
-                        v.get("b")?.as_f64()? as f32,
-                    )))
-                }
-                "Color3uint8" => {
-                    let v = val?.as_object()?;
-                    Some(Variant::Color3uint8(Color3uint8::new(
-                        v.get("r")?.as_u64()? as u8,
-                        v.get("g")?.as_u64()? as u8,
-                        v.get("b")?.as_u64()? as u8,
-                    )))
-                }
-                "BrickColor" => val?.as_u64().map(|n| {
-                    Variant::BrickColor(
-                        BrickColor::from_number(n as u16).unwrap_or(BrickColor::MediumStoneGrey),
-                    )
-                }),
-
-                // UDim types
-                "UDim" => {
-                    let v = val?.as_object()?;
-                    Some(Variant::UDim(UDim::new(
-                        v.get("scale")?.as_f64()? as f32,
-                        v.get("offset")?.as_i64()? as i32,
-                    )))
-                }
-                "UDim2" => {
-                    let v = val?.as_object()?;
-                    let x = v.get("x")?.as_object()?;
-                    let y = v.get("y")?.as_object()?;
-                    Some(Variant::UDim2(UDim2::new(
-                        UDim::new(
-                            x.get("scale")?.as_f64()? as f32,
-                            x.get("offset")?.as_i64()? as i32,
-                        ),
-                        UDim::new(
-                            y.get("scale")?.as_f64()? as f32,
-                            y.get("offset")?.as_i64()? as i32,
-                        ),
-                    )))
-                }
-
-                // CFrame
-                "CFrame" => {
-                    let v = val?.as_object()?;
-                    let pos = v.get("position")?.as_array()?;
-                    let rot = v.get("rotation")?.as_array()?;
-                    if pos.len() >= 3 && rot.len() >= 9 {
-                        Some(Variant::CFrame(CFrame::new(
-                            Vector3::new(
-                                pos[0].as_f64()? as f32,
-                                pos[1].as_f64()? as f32,
-                                pos[2].as_f64()? as f32,
-                            ),
-                            Matrix3::new(
-                                Vector3::new(
-                                    rot[0].as_f64()? as f32,
-                                    rot[1].as_f64()? as f32,
-                                    rot[2].as_f64()? as f32,
-                                ),
-                                Vector3::new(
-                                    rot[3].as_f64()? as f32,
-                                    rot[4].as_f64()? as f32,
-                                    rot[5].as_f64()? as f32,
-                                ),
-                                Vector3::new(
-                                    rot[6].as_f64()? as f32,
-                                    rot[7].as_f64()? as f32,
-                                    rot[8].as_f64()? as f32,
-                                ),
-                            ),
-                        )))
-                    } else {
-                        None
-                    }
-                }
-
-                // Enum (store as u32)
-                "Enum" => {
-                    let v = val?.as_object()?;
-                    let enum_value = v.get("value")?;
-                    // Try to get numeric value, or parse from string
-                    if let Some(n) = enum_value.as_u64() {
-                        Some(Variant::Enum(rbx_dom_weak::types::Enum::from_u32(n as u32)))
-                    } else {
-                        // For string enum values, we'd need the reflection database
-                        // For now, default to 0
-                        Some(Variant::Enum(rbx_dom_weak::types::Enum::from_u32(0)))
-                    }
-                }
-
-                // Rect
-                "Rect" => {
-                    let v = val?.as_object()?;
-                    let min = v.get("min")?.as_object()?;
-                    let max = v.get("max")?.as_object()?;
-                    Some(Variant::Rect(Rect::new(
-                        Vector2::new(
-                            min.get("x")?.as_f64()? as f32,
-                            min.get("y")?.as_f64()? as f32,
-                        ),
-                        Vector2::new(
-                            max.get("x")?.as_f64()? as f32,
-                            max.get("y")?.as_f64()? as f32,
-                        ),
-                    )))
-                }
-
-                // NumberRange
-                "NumberRange" => {
-                    let v = val?.as_object()?;
-                    Some(Variant::NumberRange(NumberRange::new(
-                        v.get("min")?.as_f64()? as f32,
-                        v.get("max")?.as_f64()? as f32,
-                    )))
-                }
-
-                // Font
-                "Font" => {
-                    let v = val?.as_object()?;
-                    let family = v.get("family")?.as_str()?.to_string();
-                    let weight = v.get("weight").and_then(|w| w.as_u64()).unwrap_or(400) as u16;
-                    let style = v.get("style").and_then(|s| s.as_str()).unwrap_or("Normal");
-                    Some(Variant::Font(Font {
-                        family,
-                        weight: FontWeight::from_u16(weight).unwrap_or(FontWeight::Regular),
-                        style: if style == "Italic" {
-                            FontStyle::Italic
-                        } else {
-                            FontStyle::Normal
-                        },
-                        cached_face_id: None,
-                    }))
-                }
-
-                // Content (asset URLs)
-                "Content" => val?
-                    .as_str()
-                    .map(|s| Variant::Content(Content::from(s.to_string()))),
-
-                // Refs - we skip these as they need special handling
-                "Ref" => None,
-
-                // Skip unknown/unsupported types
-                _ => {
-                    tracing::debug!("Unsupported property type: {}", type_str);
-                    None
-                }
-            };
-        }
-    }
-
-    // Direct value
-    match value {
-        serde_json::Value::String(s) => Some(Variant::String(s.clone())),
-        serde_json::Value::Bool(b) => Some(Variant::Bool(*b)),
-        serde_json::Value::Number(n) => {
-            if let Some(i) = n.as_i64() {
-                Some(Variant::Int32(i as i32))
-            } else {
-                n.as_f64().map(Variant::Float64)
-            }
-        }
-        _ => None,
-    }
 }
 
 /// Format project JSON files with consistent style

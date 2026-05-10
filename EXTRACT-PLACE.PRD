@@ -1,0 +1,553 @@
+# Extract Place PRD
+
+## Summary
+
+Create a user-facing `rbxsync extract-place` workflow that takes an existing RbxSync project directory and produces a publishable Roblox place file, primarily `.rbxl` and optionally `.rbxlx`. This is the opposite direction of `rbxsync import-place`: `import-place` turns a saved Roblox place into `src/` files, while `extract-place` turns `src/` files back into a place artifact that can be opened in Roblox Studio, archived, or used by a later publishing step.
+
+The repository already has `rbxsync build`, which can write `.rbxl`, `.rbxlx`, `.rbxm`, and `.rbxmx` files from project files. `extract-place` should not invent a second artifact format. Instead, it should formalize and harden the place-export path as a publishing-oriented workflow, move reusable build/export logic into shared core code, add parity with `import-place` diagnostics, and keep `rbxsync build` available for backward compatibility.
+
+## Background
+
+The command-line place import work established several decisions that should carry forward:
+
+- Local file workflows should live in the existing `rbxsync` CLI instead of a separate binary.
+- Server extraction and CLI import share filesystem writing through `rbxsync-core::extract_writer`.
+- `import-place` produces the same layout as server extraction: `rbxsync.json`, `src/<Service>/`, `.rbxjson` metadata, `.server.luau`, `.client.luau`, and `.luau` script files.
+- Local `.rbxl` and `.rbxlx` support is complete before any authenticated cloud workflow.
+- Machine-readable `--json` output and grouped diagnostics are important for CI and automation.
+- The current reverse build path exists, but it is concentrated in `rbxsync-cli/src/main.rs` and its `json_to_variant` conversion is partial.
+
+Today, a user can run `rbxsync build --path ./Game --output ./build/game.rbxl --format rbxl`. That command should remain valid. The new workflow should provide a clearer publishing entry point:
+
+```bash
+rbxsync extract-place --path ./Game --output ./build/Game.rbxl
+```
+
+The implementation should make `build` and `extract-place` call the same shared exporter so the two commands cannot drift.
+
+## Problem
+
+RbxSync now supports importing a saved Roblox place into editable project files, but the reverse workflow is still exposed as a generic build command with limited diagnostics and CLI-local implementation. Developers need a clear way to turn an edited RbxSync project back into a Roblox place artifact without opening Studio or running live sync.
+
+This matters for:
+
+- Release workflows that need deterministic `.rbxl` artifacts.
+- CI jobs that validate a project can be packaged after code changes.
+- AI-assisted edit loops that import a place, modify source, then export a new place.
+- Teams that want a single command representing "prepare this project for Roblox publishing".
+
+## Goals
+
+1. Add a `rbxsync extract-place` command that creates a `.rbxl` or `.rbxlx` from a RbxSync project.
+2. Reuse the existing project format exactly; do not introduce a new source layout.
+3. Move project-to-DOM and file-writing export logic out of CLI-only code into `rbxsync-core`.
+4. Preserve compatibility with `rbxsync build` by making it delegate to the same exporter.
+5. Improve conversion parity with `import-place`, especially for typed `.rbxjson` properties produced by the importer.
+6. Provide human-readable and machine-readable summaries with diagnostics.
+7. Make output behavior safe by default: no accidental overwrite unless explicitly allowed.
+8. Define a path for a future authenticated publish step without requiring it in the MVP.
+
+## Non-Goals
+
+- Do not remove or break `rbxsync build`.
+- Do not require Roblox Studio for local `.rbxl` or `.rbxlx` export.
+- Do not implement authenticated Roblox cloud publishing in the MVP.
+- Do not redesign `rbxsync.json`, `treeMapping`, or the `src/` filesystem format.
+- Do not make Rojo `default.project.json` the source of truth. It remains generated tooling.
+- Do not guarantee byte-for-byte equality with the original imported place. Semantic preservation is the goal.
+
+## Users and Use Cases
+
+### Local Developer Export
+
+A developer edits scripts and metadata in a RbxSync project, then creates a local place file:
+
+```bash
+rbxsync extract-place --path ./MyGame --output ./build/MyGame.rbxl --force
+```
+
+### Import, Edit, Export Loop
+
+A user imports a saved place, applies edits, then exports it again:
+
+```bash
+rbxsync import-place ./Original.rbxl --output ./Game --force
+rbxsync extract-place --path ./Game --output ./build/Edited.rbxl
+```
+
+### CI Validation
+
+A CI job validates that project files can be converted to a place artifact and emits JSON for downstream checks:
+
+```bash
+rbxsync extract-place --path . --output ./dist/game.rbxl --json --force
+```
+
+### Future Publish Workflow
+
+A later phase may add an upload step after local artifact generation:
+
+```bash
+rbxsync extract-place --path . --output ./dist/game.rbxl --publish --place-id 123456789
+```
+
+The upload design requires separate authentication, permission, rate-limit, and API error handling decisions.
+
+## Command Design
+
+Preferred command:
+
+```bash
+rbxsync extract-place [--path DIR] [--output FILE] [--format rbxl|rbxlx] [--force]
+```
+
+Examples:
+
+```bash
+rbxsync extract-place
+rbxsync extract-place --path ./Game --output ./build/Game.rbxl
+rbxsync extract-place --path ./Game --format rbxlx --output ./build/Game.rbxlx
+rbxsync extract-place --path ./Game --dry-run --json
+rbxsync extract-place --path ./Game --strict
+```
+
+`extract-place` should default to the current directory and write `build/game.rbxl` if no output is specified. If `--output` has a supported extension, that extension should determine the format. If both `--format` and `--output` are provided and disagree, the command should fail with a clear error.
+
+### Options
+
+- `--path DIR`, `-p DIR`: project directory. Defaults to the current working directory.
+- `--output FILE`, `-o FILE`: destination `.rbxl` or `.rbxlx` file. Defaults to `<project>/build/game.rbxl`.
+- `--format FORMAT`: output format. Supported MVP values are `rbxl` and `rbxlx`.
+- `--force`: allow replacing an existing output file.
+- `--dry-run`: parse and validate the project, but do not write the output file.
+- `--json`: emit a clean JSON summary with no decorative logs.
+- `--quiet`: suppress non-error progress output.
+- `--strict`: fail on unsupported properties, unresolved references, invalid metadata, or skipped files.
+- `--services LIST`: export only selected DataModel services.
+- `--include-packages / --no-packages`: control whether configured package folders are included in the place artifact.
+- `--include-assets / --no-assets`: reserved for future asset embedding behavior. MVP should leave external asset references unchanged.
+- `--publish`: future option. Uploads the generated place artifact after local export.
+- `--place-id ID`: future option required with `--publish`.
+
+## Input Requirements
+
+The command operates on a RbxSync project directory. A valid project should contain:
+
+```text
+Game/
+  rbxsync.json
+  src/
+    Workspace/
+      _meta.rbxjson
+    ServerScriptService/
+      Main.server.luau
+      Main.rbxjson
+    ReplicatedStorage/
+      Shared.luau
+  default.project.json
+  selene.toml
+  wally.toml
+```
+
+`rbxsync.json` is preferred but should not be strictly required for MVP export if `src/` exists. If the config is missing, the command can use conservative defaults:
+
+- Project root is `--path`.
+- Source tree is `src/`.
+- Output is `build/game.rbxl`.
+- Tree mapping is empty.
+- Package preservation/export uses default package settings.
+
+If `rbxsync.json` exists, `extract-place` must honor:
+
+- `tree`
+- `treeMapping`
+- package preservation settings
+- package folder name
+- tooling-related settings where relevant
+
+## Output Requirements
+
+The MVP output is a Roblox place file:
+
+- `.rbxl`: binary place file written with `rbx_binary`.
+- `.rbxlx`: XML place file written with `rbx_xml`.
+
+The command should create parent directories for the output path. It should refuse to overwrite an existing output file unless `--force` is provided. The implementation should write to a temporary file next to the final output and rename it into place only after serialization succeeds.
+
+The output place should have a `DataModel` root with selected services as top-level children. It should include script source, instance hierarchy, supported properties, supported attributes, tags, and references that can be resolved from project metadata.
+
+## Relationship to `rbxsync build`
+
+`extract-place` and `build` should share the same core exporter. The recommended migration is:
+
+1. Introduce `rbxsync-core::place_exporter`.
+2. Move `build_dom_from_src`, `build_dom_children`, service class mapping, script-name parsing, and `json_to_variant` behavior from `rbxsync-cli/src/main.rs` into core.
+3. Update `rbxsync build` to call the shared exporter.
+4. Add `rbxsync extract-place` as a place-focused wrapper around the same exporter.
+
+`rbxsync build` can continue to support model formats (`.rbxm`, `.rbxmx`), plugin output, and watch mode. `extract-place` should focus on place artifacts and publishing semantics.
+
+## Functional Requirements
+
+### Project Loading
+
+The exporter must resolve the source tree from `rbxsync.json` when available. If the config uses `treeMapping`, the exporter must invert the mapping when building the DataModel path. For example:
+
+```json
+{
+  "treeMapping": {
+    "ServerScriptService": "server",
+    "ReplicatedStorage/Shared": "shared"
+  }
+}
+```
+
+A script at `server/Main.server.luau` should become `game.ServerScriptService.Main`. A module at `shared/Net.luau` should become `game.ReplicatedStorage.Shared.Net`.
+
+Mapping resolution should use the longest matching filesystem prefix. Ambiguous or overlapping mappings should produce diagnostics. In `--strict` mode, ambiguous mappings should fail the command.
+
+### Filesystem Traversal
+
+Traversal must be deterministic. Directory entries should be sorted by normalized path before insertion into the DOM. The exporter should ignore known non-project directories:
+
+- `.git`
+- `.rbxsync`
+- `.rbxsync-backup`
+- `.rbxsync-trash`
+- `node_modules`
+- `build`
+
+The exporter should read:
+
+- `_meta.rbxjson` for container instance metadata.
+- `<Name>.rbxjson` for leaf instance metadata.
+- `<Name>.server.luau` for `Script`.
+- `<Name>.client.luau` for `LocalScript`.
+- `<Name>.luau` for `ModuleScript`.
+- `init.server.luau`, `init.client.luau`, or `init.luau` for script-like directories.
+
+### Instance Naming
+
+The exporter must prefer explicit metadata names when available. This is important because import disambiguation can create filesystem-safe names such as `Part~abc123`, while `_meta.rbxjson` or `<Name>.rbxjson` may preserve the original Roblox `Name`.
+
+Rules:
+
+1. If metadata contains `name`, use it as the Roblox instance name.
+2. Otherwise derive the name from the file or directory stem.
+3. Convert `[SLASH]` back to `/` when deriving names from paths.
+4. Do not strip `~<shortRef>` unless metadata proves it was only a filesystem disambiguator.
+
+### Class Resolution
+
+For services, use known service class names:
+
+- `Workspace`
+- `ReplicatedStorage`
+- `ReplicatedFirst`
+- `ServerScriptService`
+- `ServerStorage`
+- `StarterGui`
+- `StarterPack`
+- `StarterPlayer`
+- `Lighting`
+- `SoundService`
+- `Chat`
+- `TextChatService`
+- `LocalizationService`
+- `TestService`
+- `Teams`
+- `MaterialService`
+
+For non-service directories:
+
+- Use `_meta.rbxjson.className` when present.
+- Use script init file suffixes for script directories.
+- Fall back to `Folder` only when no metadata or script marker exists.
+
+### Script Handling
+
+Script source files are authoritative for `Source`. If a script metadata file also contains `properties.Source`, the source file should win and the command should report a duplicate-source diagnostic.
+
+Suffix rules:
+
+- `.server.luau` -> `Script`
+- `.client.luau` -> `LocalScript`
+- `.luau` -> `ModuleScript`
+- `init.server.luau` -> parent is `Script`
+- `init.client.luau` -> parent is `LocalScript`
+- `init.luau` -> parent is `ModuleScript`
+
+If a `.rbxjson` file exists next to a script file, it should provide class, properties, attributes, tags, and references for the script instance. If the class conflicts with the suffix, suffix-derived class should win unless `--strict` is enabled, in which case the conflict should fail.
+
+### Property Conversion
+
+The exporter must convert RbxSync typed JSON into `rbx_dom_weak::types::Variant`. It should support every property shape emitted by `import-place` before the command is considered complete.
+
+Minimum required conversions:
+
+- `string`, `bool`, `int`, `int32`, `int64`, `float`, `float32`, `float64`
+- `Vector2`, `Vector2int16`, `Vector3`, `Vector3int16`
+- `CFrame`
+- `Color3`, `Color3uint8`
+- `BrickColor`
+- `UDim`, `UDim2`
+- `Rect`
+- `NumberRange`
+- `NumberSequence`, `ColorSequence`
+- `Enum`
+- `Ref`
+- `Content`
+- `BinaryString`
+- `SharedString`
+- `Font`
+- `Faces`, `Axes`
+- `PhysicalProperties`
+- `Ray`, `Region3`, `Region3int16`
+- `OptionalCFrame`
+- `UniqueId`
+
+If a property cannot be converted, the exporter should skip it and emit a diagnostic. With `--strict`, unsupported properties should fail the export.
+
+### Attributes and Tags
+
+The exporter must read `attributes` and `tags` fields from `.rbxjson` metadata. Attribute values should use the same typed JSON conversion path as properties. Unsupported attributes should produce `unsupportedAttribute` diagnostics. Tags should be emitted as Roblox tag data when the DOM crate supports it; otherwise they should produce a diagnostic instead of being silently ignored.
+
+### References
+
+Reference handling should be two-pass:
+
+1. First pass creates every instance, records each instance path, metadata `referenceId`, and generated DOM referent.
+2. Second pass resolves `Ref` properties using `referenceId` first, then normalized DataModel path if available.
+
+Unresolved references should produce `unresolvedReference` diagnostics. In non-strict mode, unresolved `Ref` properties may be omitted to keep export moving. In strict mode, they should fail.
+
+### Packages
+
+The command should honor package preservation/export settings from `rbxsync.json`. By default, resolved package folders should be included when they are present under the exported tree. `--no-packages` should skip known package folders and report a summary count. This is useful for teams that want a publish artifact without local dependency sources, but the default should preserve behavior most likely to make the exported place runnable.
+
+### Terrain
+
+The importer currently reports unsupported terrain voxel data as a diagnostic. `extract-place` should not claim terrain round-trip parity until a stable terrain representation exists in the project format. For MVP:
+
+- Export supported `Terrain` metadata properties if present.
+- Emit diagnostics for terrain voxel artifacts that cannot be written.
+- Do not fail unless `--strict` is enabled.
+
+### Output Safety
+
+Before writing:
+
+1. Validate the project directory exists.
+2. Validate the source tree exists.
+3. Validate the output extension or format.
+4. Fail if the output file exists and `--force` is not set.
+5. Create the output parent directory if needed.
+6. Write to a temporary sibling file.
+7. Rename the temporary file to the final output.
+
+Temporary files should be cleaned up after failed writes when possible.
+
+## Diagnostics
+
+Diagnostics should mirror the `import-place` approach: structured internally, grouped for humans, and summarized for JSON.
+
+Recommended diagnostic kinds:
+
+- `invalidProjectConfig`
+- `missingSourceTree`
+- `invalidMetadataJson`
+- `unsupportedProperty`
+- `unsupportedAttribute`
+- `unsupportedTag`
+- `unresolvedReference`
+- `duplicateSource`
+- `classConflict`
+- `ambiguousTreeMapping`
+- `skippedFile`
+- `skippedPackage`
+- `unsupportedTerrainVoxelData`
+- `outputExists`
+- `publishNotImplemented`
+
+Human output example:
+
+```text
+Exported place: build/game.rbxl
+Instances: 42
+Scripts: 8
+Services: Workspace, ReplicatedStorage, ServerScriptService
+Warnings:
+  unsupportedProperty: 3
+  unresolvedReference: 1
+```
+
+JSON output example:
+
+```json
+{
+  "ok": true,
+  "command": "extract-place",
+  "projectDir": "/repo/Game",
+  "sourceDir": "/repo/Game/src",
+  "output": "/repo/Game/build/game.rbxl",
+  "format": "rbxl",
+  "instances": 42,
+  "scripts": 8,
+  "metadataFiles": 34,
+  "services": ["Workspace", "ReplicatedStorage", "ServerScriptService"],
+  "bytesWritten": 98124,
+  "diagnosticSummary": {
+    "unsupportedProperty": 3,
+    "unresolvedReference": 1
+  },
+  "diagnostics": [
+    {
+      "kind": "unresolvedReference",
+      "path": "ReplicatedStorage/Shared/Config",
+      "property": "Adornee",
+      "message": "Reference target 'RBX123' was not found"
+    }
+  ]
+}
+```
+
+With `--json`, stdout must contain only JSON. Logs should be lowered or redirected so automation can parse stdout directly.
+
+## Architecture
+
+Add a shared exporter module:
+
+```text
+rbxsync-core/src/place_exporter.rs
+```
+
+Suggested API:
+
+```rust
+pub struct PlaceExportOptions {
+    pub project_dir: PathBuf,
+    pub source_dir: PathBuf,
+    pub output_path: PathBuf,
+    pub format: PlaceExportFormat,
+    pub services: Option<HashSet<String>>,
+    pub include_packages: bool,
+    pub strict: bool,
+    pub dry_run: bool,
+    pub tree_mapping: HashMap<String, String>,
+}
+
+pub struct PlaceExportSummary {
+    pub output_path: PathBuf,
+    pub format: PlaceExportFormat,
+    pub instances: usize,
+    pub scripts: usize,
+    pub metadata_files: usize,
+    pub services: Vec<String>,
+    pub bytes_written: Option<u64>,
+    pub diagnostics: Vec<PlaceExportDiagnostic>,
+}
+
+pub fn export_place(options: PlaceExportOptions) -> anyhow::Result<PlaceExportSummary>;
+```
+
+Internal phases:
+
+1. Load project config and resolve paths.
+2. Discover project files.
+3. Build an intermediate instance graph.
+4. Create a `WeakDom`.
+5. Resolve references.
+6. Convert typed JSON properties to variants.
+7. Validate diagnostics and strict-mode behavior.
+8. Write `.rbxl` or `.rbxlx` unless `--dry-run`.
+9. Return a summary.
+
+The CLI should be thin. It should parse flags, initialize logging appropriately, call core, and print summaries.
+
+## Testing Strategy
+
+### Unit Tests
+
+Add core tests for:
+
+- `treeMapping` inversion and longest-prefix behavior.
+- Script suffix and init-file class resolution.
+- `[SLASH]` path unescaping.
+- Metadata name precedence.
+- Duplicate sibling handling.
+- Typed JSON to `Variant` conversion.
+- Attribute conversion.
+- Reference resolution.
+- Strict-mode failures.
+- Output format inference.
+
+### Integration Tests
+
+Add CLI tests that:
+
+1. Create a temporary RbxSync project.
+2. Run `rbxsync extract-place --output game.rbxl --json --force`.
+3. Assert stdout is valid JSON.
+4. Assert the output file exists and is non-empty.
+5. Re-import the artifact with `rbxsync import-place`.
+6. Compare normalized project files for supported metadata and scripts.
+
+Add the same coverage for `.rbxlx`.
+
+### Regression Tests
+
+Use fixtures created by `import-place` coverage so the reverse path proves it can consume importer output. Any known unsupported properties should appear in explicit expected diagnostics.
+
+## Acceptance Criteria
+
+The feature is complete when:
+
+1. `rbxsync extract-place --path ./Game --output ./build/Game.rbxl --force` writes a non-empty `.rbxl`.
+2. `rbxsync extract-place --path ./Game --output ./build/Game.rbxlx --force` writes a non-empty `.rbxlx`.
+3. `rbxsync extract-place --dry-run --json` validates the project and writes no file.
+4. Existing `rbxsync build` behavior still works.
+5. `build` and `extract-place` share the same core exporter.
+6. The exporter supports all typed JSON property shapes currently emitted by `import-place`, or reports unsupported shapes as structured diagnostics.
+7. Round-trip tests prove `import-place -> extract-place -> import-place` preserves supported scripts and metadata.
+8. `--json` stdout is parseable without log filtering.
+9. `--strict` fails on unresolved references and unsupported required data.
+10. The implementation is validated with `cargo fmt -- --check`, `cargo test -p rbxsync-core`, and `cargo test -p rbxsync`.
+
+## Rollout Plan
+
+### Milestone 1: Shared Exporter
+
+Move current build/export internals from `rbxsync-cli/src/main.rs` into `rbxsync-core::place_exporter`. Keep `rbxsync build` behavior unchanged by delegating to core.
+
+### Milestone 2: `extract-place` CLI
+
+Add the new command with `--path`, `--output`, `--format`, `--force`, `--dry-run`, `--json`, `--quiet`, `--strict`, and `--services`.
+
+### Milestone 3: Property and Reference Parity
+
+Expand `json_to_variant` into a complete converter for `import-place` output. Add two-pass reference resolution and diagnostics.
+
+### Milestone 4: Round-Trip Tests
+
+Add import/export/import regression tests for `.rbxl` and `.rbxlx`.
+
+### Milestone 5: Publishing Preparation
+
+Document and scaffold the optional future `--publish` flow without enabling upload by default. Keep authentication and cloud API behavior behind a later PRD or implementation plan.
+
+## Risks
+
+- The name `extract-place` may be confused with existing `rbxsync extract`, which extracts from Studio into files. Documentation should describe it as "extract a publishable place artifact from a project" and cross-link it with `import-place`.
+- Current build conversion is partial. Moving it into core without improving conversion would make the new command look more complete than it is.
+- Some Roblox property variants may not have a stable editable JSON representation yet.
+- Terrain voxel data is not fully represented in the current project layout.
+- Authenticated publishing can create production risk if added too early or without clear confirmations.
+
+## Open Questions
+
+- Should `extract-place` eventually replace `build --format rbxl` in documentation, while keeping `build` as the generic artifact command?
+- Should the default output be `build/game.rbxl` or `build/<project-name>.rbxl`?
+- Should package folders be included by default for all projects, or only when package preservation is enabled?
+- Should future publishing be `extract-place --publish` or a separate `publish-place` command that consumes an already-generated `.rbxl`?
+- Should strict mode become the default in CI examples?
+

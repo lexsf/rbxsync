@@ -11,6 +11,7 @@
 pub mod extract_writer;
 pub mod obfuscator;
 pub mod path_utils;
+pub mod place_exporter;
 pub mod place_importer;
 pub mod plugin_builder;
 pub mod rojo;
@@ -21,6 +22,10 @@ pub use extract_writer::{write_serialized_instances, ExtractWriterOptions, Extra
 pub use obfuscator::{ObfuscationResult, Obfuscator, ObfuscatorConfig};
 pub use path_utils::{
     normalize_path, path_to_string, path_with_suffix, pathbuf_with_suffix, sanitize_filename,
+};
+pub use place_exporter::{
+    build_dom_from_project, export_place, PlaceExportDiagnostic, PlaceExportDiagnosticKind,
+    PlaceExportFormat, PlaceExportOptions, PlaceExportSummary,
 };
 pub use place_importer::{
     import_place_file, ImportDiagnostic, ImportDiagnosticKind, PlaceFileFormat, PlaceImportOptions,
