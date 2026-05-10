@@ -17,7 +17,9 @@ The visible proof of success is a generated `.rbxl` or `.rbxlx` file that can be
 - [x] (2026-05-10 23:19Z) Completed Milestone 1 by adding `rbxsync-core/src/place_exporter.rs`, exporting the shared API from `rbxsync-core/src/lib.rs`, and refactoring `rbxsync-cli/src/main.rs::cmd_build` to call `rbxsync_core::export_place`.
 - [x] (2026-05-10 23:19Z) Ran `mise exec -- cargo fmt`, `mise exec -- cargo fmt -- --check`, `mise exec -- cargo test -p rbxsync-core`, `mise exec -- cargo test -p rbxsync`, and `git diff --check`; all passed.
 - [x] (2026-05-10 23:19Z) Verified Milestone 1 smoke behavior by creating `/tmp/rbxsync-extract-plan/source/src/ServerScriptService/Main.server.luau`, running `mise exec -- cargo run -p rbxsync -- build --path /tmp/rbxsync-extract-plan/source --output /tmp/rbxsync-extract-plan/game.rbxl --format rbxl`, and confirming `/tmp/rbxsync-extract-plan/game.rbxl` is non-empty.
-- [ ] Milestone 2: Expand the shared exporter to understand RbxSync project metadata, tree mapping, typed properties, attributes, tags, references, package filtering, and structured diagnostics.
+- [x] (2026-05-10 23:38Z) Completed Milestone 2 by expanding `rbxsync-core::place_exporter` with `rbxsync.json` config loading, `treeMapping` root discovery, metadata name precedence, `[SLASH]` unescaping, attributes, tags, package skipping, two-pass `Ref` resolution, strict-mode diagnostic failure, and richer typed JSON to `Variant` conversion.
+- [x] (2026-05-10 23:38Z) Added focused core exporter tests for mapped roots, metadata names, script source precedence, attributes, tags, resolved refs, strict unresolved-ref failure, dry-run summaries, and unsupported-property diagnostics.
+- [x] (2026-05-10 23:38Z) Ran `mise exec -- cargo fmt -- --check`, `mise exec -- cargo test -p rbxsync-core`, `mise exec -- cargo test -p rbxsync`, and `git diff --check`; all passed.
 - [ ] Milestone 3: Add the `rbxsync extract-place` command with safe output handling, `--dry-run`, `--json`, `--quiet`, `--strict`, `--services`, and place-only format handling.
 - [ ] Milestone 4: Add unit and CLI integration tests proving `.rbxl`, `.rbxlx`, dry-run, strict diagnostics, build compatibility, and import/export/import round-trip behavior.
 - [ ] Milestone 5: Polish user output, document the future publishing boundary, update this plan with final validation evidence, and record any remaining follow-up work.
@@ -38,6 +40,12 @@ The visible proof of success is a generated `.rbxl` or `.rbxlx` file that can be
 
 - Observation: Milestone 1 can preserve existing `rbxsync build` behavior by keeping output-path resolution, watch-mode orchestration, and user-facing status prints in the CLI while moving DOM construction and Roblox file writing into core.
   Evidence: `rbxsync-cli/src/main.rs::cmd_build` still resolves `--plugin`, default `build/game.<ext>`, and watch rebuild behavior, but each build now calls `rbxsync_core::export_place` with `force: true` to match the previous overwrite behavior.
+
+- Observation: Reference properties require a two-pass exporter because a `.rbxjson` file can refer to an instance that appears later in filesystem traversal or in a mapped root outside `src/`.
+  Evidence: `rbxsync-core/src/place_exporter.rs` now stores `PendingRef` records while applying metadata, records both metadata `referenceId` and normalized DataModel path in lookup maps after insertion, and resolves pending refs after all roots have been walked.
+
+- Observation: Script source files need to remain the authoritative source for `Source` even when importer-created script metadata also contains a `Source` property.
+  Evidence: The new `exports_tree_mapping_metadata_names_attributes_tags_and_refs` test writes both `Main.server.luau` and `Main.rbxjson` with `properties.Source`; the exporter emits a `DuplicateSource` diagnostic and keeps the `.server.luau` contents in the DOM.
 
 ## Decision Log
 
@@ -62,6 +70,8 @@ The visible proof of success is a generated `.rbxl` or `.rbxlx` file that can be
 This initial plan translates `EXTRACT-PLACE.PRD` into an implementation path. No code has been changed yet for `extract-place`. The first concrete outcome should be a shared `rbxsync-core::place_exporter` used by the existing build command with no user-visible regression. The final outcome should be a new `rbxsync extract-place` command that produces a place file, emits clean JSON when requested, and can be verified by importing its output back into a temporary project.
 
 Milestone 1 is complete. `rbxsync-core/src/place_exporter.rs` now owns the shared project-to-DOM and DOM-to-artifact implementation, `rbxsync-core/src/lib.rs` re-exports the exporter API, and `rbxsync-cli/src/main.rs::cmd_build` delegates to `export_place` while retaining existing build command UX. This is not yet the new `extract-place` command; it is the required shared foundation for the later command.
+
+Milestone 2 is complete. The exporter now has the richer project semantics needed by `extract-place`: it can discover roots from `treeMapping`, use metadata names instead of filesystem-safe names, unescape `[SLASH]`, apply attributes and tags, resolve `Ref` properties after all instances exist, and return structured diagnostics. The existing `rbxsync build` command still passes its CLI tests, so this deeper exporter behavior did not regress the current user-facing build path.
 
 ## Context and Orientation
 
@@ -247,3 +257,5 @@ At the end of the plan, `rbxsync-core/src/lib.rs` should export the main place e
 2026-05-08: Initial ExecPlan created from `EXTRACT-PLACE.PRD` and current repository inspection. The plan intentionally defers authenticated publishing and focuses on a local, testable project-to-place workflow.
 
 2026-05-10: Milestone 1 completed. The current build/export implementation was moved into `rbxsync-core::place_exporter`, the existing `rbxsync build` command now delegates to the shared exporter, and validation confirmed the build command still writes a non-empty `.rbxl`.
+
+2026-05-10: Milestone 2 completed. The shared exporter now understands project config, tree mapping, metadata names, attributes, tags, package filtering, pending reference resolution, strict-mode diagnostics, and a broader importer-compatible property conversion surface.
