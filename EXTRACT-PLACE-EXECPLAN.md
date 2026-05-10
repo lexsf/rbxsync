@@ -20,7 +20,9 @@ The visible proof of success is a generated `.rbxl` or `.rbxlx` file that can be
 - [x] (2026-05-10 23:38Z) Completed Milestone 2 by expanding `rbxsync-core::place_exporter` with `rbxsync.json` config loading, `treeMapping` root discovery, metadata name precedence, `[SLASH]` unescaping, attributes, tags, package skipping, two-pass `Ref` resolution, strict-mode diagnostic failure, and richer typed JSON to `Variant` conversion.
 - [x] (2026-05-10 23:38Z) Added focused core exporter tests for mapped roots, metadata names, script source precedence, attributes, tags, resolved refs, strict unresolved-ref failure, dry-run summaries, and unsupported-property diagnostics.
 - [x] (2026-05-10 23:38Z) Ran `mise exec -- cargo fmt -- --check`, `mise exec -- cargo test -p rbxsync-core`, `mise exec -- cargo test -p rbxsync`, and `git diff --check`; all passed.
-- [ ] Milestone 3: Add the `rbxsync extract-place` command with safe output handling, `--dry-run`, `--json`, `--quiet`, `--strict`, `--services`, and place-only format handling.
+- [x] (2026-05-10 23:50Z) Completed Milestone 3 by adding `Commands::ExtractPlace` and `cmd_extract_place` in `rbxsync-cli/src/main.rs` with `--path`, `--output`, `--format`, `--force`, `--dry-run`, `--json`, `--quiet`, `--strict`, `--services`, `--include-packages`, and `--no-packages`.
+- [x] (2026-05-10 23:50Z) Verified `extract-place` behavior manually with a temporary project: JSON dry-run reported 3 instances and 1 script without writing, `--force --json` wrote a 427-byte `.rbxl`, direct `target/debug/rbxsync ... --json` produced clean JSON stdout, format/output mismatch failed, and existing-output without `--force` failed.
+- [x] (2026-05-10 23:50Z) Ran `mise exec -- cargo fmt -- --check`, `mise exec -- cargo test -p rbxsync-core`, `mise exec -- cargo test -p rbxsync`, and `git diff --check`; all passed.
 - [ ] Milestone 4: Add unit and CLI integration tests proving `.rbxl`, `.rbxlx`, dry-run, strict diagnostics, build compatibility, and import/export/import round-trip behavior.
 - [ ] Milestone 5: Polish user output, document the future publishing boundary, update this plan with final validation evidence, and record any remaining follow-up work.
 
@@ -47,6 +49,9 @@ The visible proof of success is a generated `.rbxl` or `.rbxlx` file that can be
 - Observation: Script source files need to remain the authoritative source for `Source` even when importer-created script metadata also contains a `Source` property.
   Evidence: The new `exports_tree_mapping_metadata_names_attributes_tags_and_refs` test writes both `Main.server.luau` and `Main.rbxjson` with `properties.Source`; the exporter emits a `DuplicateSource` diagnostic and keeps the `.server.luau` contents in the DOM.
 
+- Observation: `cargo run ... --json` includes Cargo's own build/run lines before the command JSON, so clean stdout must be validated against the built binary rather than the Cargo wrapper.
+  Evidence: `mise exec -- cargo run -p rbxsync -- extract-place ... --json` printed Cargo `Finished` and `Running` lines before the JSON, while `target/debug/rbxsync extract-place ... --json` printed only the JSON object.
+
 ## Decision Log
 
 - Decision: Name the implementation plan `EXTRACT-PLACE-EXECPLAN.md`.
@@ -72,6 +77,8 @@ This initial plan translates `EXTRACT-PLACE.PRD` into an implementation path. No
 Milestone 1 is complete. `rbxsync-core/src/place_exporter.rs` now owns the shared project-to-DOM and DOM-to-artifact implementation, `rbxsync-core/src/lib.rs` re-exports the exporter API, and `rbxsync-cli/src/main.rs::cmd_build` delegates to `export_place` while retaining existing build command UX. This is not yet the new `extract-place` command; it is the required shared foundation for the later command.
 
 Milestone 2 is complete. The exporter now has the richer project semantics needed by `extract-place`: it can discover roots from `treeMapping`, use metadata names instead of filesystem-safe names, unescape `[SLASH]`, apply attributes and tags, resolve `Ref` properties after all instances exist, and return structured diagnostics. The existing `rbxsync build` command still passes its CLI tests, so this deeper exporter behavior did not regress the current user-facing build path.
+
+Milestone 3 is complete. The user-facing `rbxsync extract-place` command now exists and delegates to the shared exporter. The command is place-focused, supports safe overwrite behavior through `--force`, supports dry-run and strict mode, emits clean machine-readable JSON when run as the built binary, and keeps authenticated publishing out of scope.
 
 ## Context and Orientation
 
@@ -259,3 +266,5 @@ At the end of the plan, `rbxsync-core/src/lib.rs` should export the main place e
 2026-05-10: Milestone 1 completed. The current build/export implementation was moved into `rbxsync-core::place_exporter`, the existing `rbxsync build` command now delegates to the shared exporter, and validation confirmed the build command still writes a non-empty `.rbxl`.
 
 2026-05-10: Milestone 2 completed. The shared exporter now understands project config, tree mapping, metadata names, attributes, tags, package filtering, pending reference resolution, strict-mode diagnostics, and a broader importer-compatible property conversion surface.
+
+2026-05-10: Milestone 3 completed. The CLI now exposes `rbxsync extract-place` with safe local place export options, JSON/human summaries, dry-run support, service filtering, package inclusion controls, and format/output validation.

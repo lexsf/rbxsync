@@ -185,6 +185,53 @@ enum Commands {
         plugin: Option<String>,
     },
 
+    /// Export a RbxSync project into a .rbxl or .rbxlx place file
+    ExtractPlace {
+        /// Project directory (default: current directory)
+        #[arg(short, long)]
+        path: Option<PathBuf>,
+
+        /// Output place file (default: build/game.rbxl)
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+
+        /// Output format: rbxl or rbxlx. Defaults to output extension or rbxl.
+        #[arg(short, long)]
+        format: Option<String>,
+
+        /// Allow replacing an existing output file
+        #[arg(long)]
+        force: bool,
+
+        /// Parse and summarize without writing the place file
+        #[arg(long)]
+        dry_run: bool,
+
+        /// Emit a machine-readable JSON summary
+        #[arg(long)]
+        json: bool,
+
+        /// Suppress human-readable progress output
+        #[arg(short, long)]
+        quiet: bool,
+
+        /// Fail if diagnostics are produced
+        #[arg(long)]
+        strict: bool,
+
+        /// Specific services to export, comma-separated or repeated
+        #[arg(long, value_delimiter = ',')]
+        services: Option<Vec<String>>,
+
+        /// Include package folders in the exported place
+        #[arg(long, conflicts_with = "no_packages")]
+        include_packages: bool,
+
+        /// Skip package folders in the exported place
+        #[arg(long)]
+        no_packages: bool,
+    },
+
     /// Import a .rbxl or .rbxlx place file into a RbxSync project
     ImportPlace {
         /// Place file to import (.rbxl or .rbxlx)
@@ -546,7 +593,10 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
     let quiet_logging = matches!(
         &cli.command,
-        Commands::ImportPlace { json: true, .. } | Commands::ImportPlace { quiet: true, .. }
+        Commands::ImportPlace { json: true, .. }
+            | Commands::ImportPlace { quiet: true, .. }
+            | Commands::ExtractPlace { json: true, .. }
+            | Commands::ExtractPlace { quiet: true, .. }
     );
 
     // Initialize logging
@@ -637,6 +687,34 @@ async fn main() -> Result<()> {
             plugin,
         } => {
             cmd_build(path, output, format, watch, plugin).await?;
+        }
+        Commands::ExtractPlace {
+            path,
+            output,
+            format,
+            force,
+            dry_run,
+            json,
+            quiet,
+            strict,
+            services,
+            include_packages,
+            no_packages,
+        } => {
+            let include_packages = include_packages || !no_packages;
+            cmd_extract_place(
+                path,
+                output,
+                format,
+                force,
+                dry_run,
+                json,
+                quiet,
+                strict,
+                services,
+                include_packages,
+            )
+            .await?;
         }
         Commands::ImportPlace {
             input,
@@ -1338,6 +1416,126 @@ fn package_writer_options(config: &ProjectConfig) -> (bool, String) {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
+async fn cmd_extract_place(
+    path: Option<PathBuf>,
+    output: Option<PathBuf>,
+    format: Option<String>,
+    force: bool,
+    dry_run: bool,
+    json_output: bool,
+    quiet: bool,
+    strict: bool,
+    services: Option<Vec<String>>,
+    include_packages: bool,
+) -> Result<()> {
+    let project_dir_input = path.unwrap_or(std::env::current_dir()?);
+    let project_dir = project_dir_input
+        .canonicalize()
+        .unwrap_or(project_dir_input);
+    let config_path = project_dir.join("rbxsync.json");
+    let existing_config = read_project_config(&config_path)?;
+
+    let export_format = resolve_extract_place_format(format.as_deref(), output.as_ref())?;
+    let output_path = output.unwrap_or_else(|| {
+        project_dir
+            .join("build")
+            .join(format!("game.{}", export_format.extension()))
+    });
+    let output_path = if output_path.is_absolute() {
+        output_path
+    } else {
+        project_dir.join(output_path)
+    };
+
+    let source_dir = existing_config
+        .as_ref()
+        .map(|config| resolve_config_path(&project_dir, &config.tree))
+        .unwrap_or_else(|| project_dir.join("src"));
+    let tree_mapping = existing_config
+        .as_ref()
+        .map(|config| config.tree_mapping.clone())
+        .unwrap_or_default();
+    let selected_services = services.map(|values| {
+        values
+            .into_iter()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+            .collect::<HashSet<_>>()
+    });
+
+    if !json_output && !quiet {
+        println!("Exporting project: {}", project_dir.display());
+        println!("Source: {}", source_dir.display());
+        println!("Output: {}", output_path.display());
+    }
+
+    let summary = export_place(PlaceExportOptions {
+        project_dir: project_dir.clone(),
+        source_dir,
+        output_path,
+        format: export_format,
+        force,
+        dry_run,
+        strict,
+        services: selected_services,
+        include_packages,
+        tree_mapping,
+    })?;
+
+    if json_output || !quiet {
+        print_export_summary(json_output, dry_run, strict, &summary)?;
+    }
+
+    Ok(())
+}
+
+fn resolve_config_path(project_dir: &std::path::Path, configured: &std::path::Path) -> PathBuf {
+    if configured.is_absolute() {
+        configured.to_path_buf()
+    } else {
+        project_dir.join(configured)
+    }
+}
+
+fn resolve_extract_place_format(
+    format: Option<&str>,
+    output: Option<&PathBuf>,
+) -> Result<PlaceExportFormat> {
+    let output_format = output
+        .and_then(|output| output.extension())
+        .and_then(|extension| extension.to_str())
+        .and_then(|extension| match extension.to_ascii_lowercase().as_str() {
+            "rbxl" => Some(PlaceExportFormat::Rbxl),
+            "rbxlx" => Some(PlaceExportFormat::Rbxlx),
+            _ => None,
+        });
+
+    let requested_format = if let Some(format) = format {
+        let parsed = PlaceExportFormat::from_build_format(format)?;
+        if !matches!(parsed, PlaceExportFormat::Rbxl | PlaceExportFormat::Rbxlx) {
+            bail!("extract-place only supports rbxl and rbxlx formats");
+        }
+        Some(parsed)
+    } else {
+        None
+    };
+
+    if let (Some(requested), Some(from_output)) = (requested_format, output_format) {
+        if requested != from_output {
+            bail!(
+                "--format {} does not match output extension .{}",
+                requested.extension(),
+                from_output.extension()
+            );
+        }
+    }
+
+    Ok(requested_format
+        .or(output_format)
+        .unwrap_or(PlaceExportFormat::Rbxl))
+}
+
 fn imported_services(instances: &[serde_json::Value]) -> Vec<String> {
     let mut services = instances
         .iter()
@@ -1481,6 +1679,99 @@ fn print_import_summary(
 }
 
 fn diagnostic_summary(diagnostics: &[rbxsync_core::ImportDiagnostic]) -> BTreeMap<String, usize> {
+    let mut summary = BTreeMap::new();
+    for diagnostic in diagnostics {
+        let key = serde_json::to_value(&diagnostic.kind)
+            .ok()
+            .and_then(|value| value.as_str().map(str::to_string))
+            .unwrap_or_else(|| format!("{:?}", diagnostic.kind));
+        *summary.entry(key).or_insert(0) += 1;
+    }
+    summary
+}
+
+fn print_export_summary(
+    json_output: bool,
+    dry_run: bool,
+    strict: bool,
+    summary: &rbxsync_core::PlaceExportSummary,
+) -> Result<()> {
+    if json_output {
+        let diagnostic_summary = export_diagnostic_summary(&summary.diagnostics);
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "success": true,
+                "command": "extract-place",
+                "dryRun": dry_run,
+                "strict": strict,
+                "output": summary.output_path,
+                "format": summary.format,
+                "instances": summary.instances,
+                "scripts": summary.scripts,
+                "metadataFiles": summary.metadata_files,
+                "services": summary.services,
+                "serviceCount": summary.services.len(),
+                "bytesWritten": summary.bytes_written,
+                "diagnostics": summary.diagnostics,
+                "diagnosticCount": summary.diagnostics.len(),
+                "diagnosticSummary": diagnostic_summary,
+            }))?
+        );
+        return Ok(());
+    }
+
+    if dry_run {
+        println!("Dry run: no place file written");
+    } else {
+        println!("Exported place: {}", summary.output_path.display());
+    }
+    println!("Format: {}", summary.format);
+    println!(
+        "Exported {} instances across {} services",
+        summary.instances,
+        summary.services.len()
+    );
+    println!("Scripts: {}", summary.scripts);
+    if let Some(bytes) = summary.bytes_written {
+        println!("Size: {:.1} KB", bytes as f64 / 1024.0);
+    }
+    if !summary.services.is_empty() {
+        println!("Services: {}", summary.services.join(", "));
+    }
+
+    if !summary.diagnostics.is_empty() {
+        let diagnostic_summary = export_diagnostic_summary(&summary.diagnostics);
+        let grouped = diagnostic_summary
+            .iter()
+            .map(|(kind, count)| format!("{}={}", kind, count))
+            .collect::<Vec<_>>()
+            .join(", ");
+        println!("Warnings: {} ({})", summary.diagnostics.len(), grouped);
+        for diagnostic in summary.diagnostics.iter().take(5) {
+            if let Some(property) = &diagnostic.property {
+                println!(
+                    "  - {:?} {} {}: {}",
+                    diagnostic.kind, diagnostic.path, property, diagnostic.message
+                );
+            } else {
+                println!(
+                    "  - {:?} {}: {}",
+                    diagnostic.kind, diagnostic.path, diagnostic.message
+                );
+            }
+        }
+        if summary.diagnostics.len() > 5 {
+            println!("  ... {} more", summary.diagnostics.len() - 5);
+        }
+    }
+
+    Ok(())
+}
+
+fn export_diagnostic_summary(
+    diagnostics: &[rbxsync_core::PlaceExportDiagnostic],
+) -> BTreeMap<String, usize> {
     let mut summary = BTreeMap::new();
     for diagnostic in diagnostics {
         let key = serde_json::to_value(&diagnostic.kind)
