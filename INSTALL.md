@@ -1,7 +1,7 @@
 # Install and Run Locally
 
 This guide explains how to build this repository on your local machine and run
-the command-line place importer.
+the command-line place import and export workflows.
 
 ## Prerequisites
 
@@ -107,18 +107,44 @@ Notes:
 - `--dry-run` parses the file and reports counts without writing files.
 - `--json` prints a machine-readable summary including diagnostics.
 
-## Build a Place Back from Files
+## Export a Place Back from Files
 
-After importing, verify the project can build back to a Roblox place file:
+After importing or editing a RbxSync project, use `extract-place` to create a
+Roblox place file from project files:
 
 ```bash
-rbxsync build --path ./GameProject --output ./GameProject/build/game.rbxl
+rbxsync extract-place --path ./GameProject --output ./GameProject/build/game.rbxl --force
 ```
 
 For XML output:
 
 ```bash
-rbxsync build --path ./GameProject --output ./GameProject/build/game.rbxlx --format rbxlx
+rbxsync extract-place --path ./GameProject --output ./GameProject/build/game.rbxlx --force
+```
+
+Useful export options:
+
+```bash
+rbxsync extract-place --path ./GameProject --dry-run --json
+rbxsync extract-place --path ./GameProject --services Workspace,ServerScriptService
+rbxsync extract-place --path ./GameProject --output ./build/game.rbxlx --format rbxlx --force
+rbxsync extract-place --path ./GameProject --no-packages --force
+```
+
+Notes:
+
+- `--force` is required when replacing an existing output file.
+- `--dry-run` validates and summarizes without writing a place file.
+- `--json` prints a machine-readable summary including diagnostics.
+- `extract-place` creates local `.rbxl` or `.rbxlx` files. It does not publish
+  to Roblox cloud services.
+
+The older `build` command remains available for generic artifact creation,
+including `.rbxm` and `.rbxmx` model outputs:
+
+```bash
+rbxsync build --path ./GameProject --output ./GameProject/build/game.rbxl
+rbxsync build --path ./GameProject --output ./GameProject/build/model.rbxm --format rbxm
 ```
 
 ## Run Validation
@@ -128,6 +154,7 @@ Focused checks for the importer:
 ```bash
 mise exec -- cargo test -p rbxsync-core
 mise exec -- cargo test -p rbxsync --test import_place
+mise exec -- cargo test -p rbxsync --test extract_place
 ```
 
 Full workspace validation:
@@ -158,4 +185,5 @@ If JSON output is needed for scripts or CI, use:
 rbxsync import-place ./Game.rbxl --output ./GameProject --force --json
 ```
 
-Published `--place-id` import is not implemented in this local-file workflow.
+Published `--place-id` import and cloud publishing are not implemented in this
+local-file workflow.

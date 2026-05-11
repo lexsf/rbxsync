@@ -155,6 +155,8 @@ rbxsync build -f rbxmx               # Build to .rbxmx (XML model)
 rbxsync build --watch                # Watch for changes and auto-rebuild
 rbxsync build --plugin MyPlugin.rbxm # Build directly to Studio plugins folder
 rbxsync build -o output.rbxl         # Specify output path
+rbxsync import-place Game.rbxl       # Convert a place file into project files
+rbxsync extract-place -o Game.rbxl   # Export project files to a place file
 ```
 
 ### Utility Commands

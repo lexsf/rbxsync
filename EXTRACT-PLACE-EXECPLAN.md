@@ -23,8 +23,11 @@ The visible proof of success is a generated `.rbxl` or `.rbxlx` file that can be
 - [x] (2026-05-10 23:50Z) Completed Milestone 3 by adding `Commands::ExtractPlace` and `cmd_extract_place` in `rbxsync-cli/src/main.rs` with `--path`, `--output`, `--format`, `--force`, `--dry-run`, `--json`, `--quiet`, `--strict`, `--services`, `--include-packages`, and `--no-packages`.
 - [x] (2026-05-10 23:50Z) Verified `extract-place` behavior manually with a temporary project: JSON dry-run reported 3 instances and 1 script without writing, `--force --json` wrote a 427-byte `.rbxl`, direct `target/debug/rbxsync ... --json` produced clean JSON stdout, format/output mismatch failed, and existing-output without `--force` failed.
 - [x] (2026-05-10 23:50Z) Ran `mise exec -- cargo fmt -- --check`, `mise exec -- cargo test -p rbxsync-core`, `mise exec -- cargo test -p rbxsync`, and `git diff --check`; all passed.
-- [ ] Milestone 4: Add unit and CLI integration tests proving `.rbxl`, `.rbxlx`, dry-run, strict diagnostics, build compatibility, and import/export/import round-trip behavior.
-- [ ] Milestone 5: Polish user output, document the future publishing boundary, update this plan with final validation evidence, and record any remaining follow-up work.
+- [x] (2026-05-10 23:55Z) Completed Milestone 4 by adding `rbxsync-cli/tests/extract_place.rs` with real-binary integration coverage for binary `.rbxl` export, XML `.rbxlx` export inferred from output extension, dry-run JSON with no output file, existing-output failure without `--force`, format/output mismatch failure, and export/import round-trip behavior.
+- [x] (2026-05-10 23:55Z) Verified the new integration suite with `mise exec -- cargo test -p rbxsync --test extract_place`; all 5 tests passed.
+- [x] (2026-05-10 23:55Z) Ran the full focused validation set for this milestone: `mise exec -- cargo test -p rbxsync-core`, `mise exec -- cargo test -p rbxsync --test extract_place`, `mise exec -- cargo test -p rbxsync`, `mise exec -- cargo fmt -- --check`, and `git diff --check`; all passed.
+- [x] (2026-05-10 23:59Z) Completed Milestone 5 by reviewing `rbxsync extract-place --help`, confirming no `--publish` placeholder exists, and documenting the local export workflow in `INSTALL.md`, `README.md`, and `docs/cli/commands.md`.
+- [x] (2026-05-10 23:59Z) Ran final validation: `mise exec -- cargo fmt -- --check`, `mise exec -- cargo test -p rbxsync-core`, `mise exec -- cargo test -p rbxsync --test extract_place`, `mise exec -- cargo test -p rbxsync`, `mise exec -- cargo test --workspace`, and `git diff --check`; all passed. Workspace tests still emit existing non-failing MCP dead-code warnings.
 
 ## Surprises & Discoveries
 
@@ -51,6 +54,12 @@ The visible proof of success is a generated `.rbxl` or `.rbxlx` file that can be
 
 - Observation: `cargo run ... --json` includes Cargo's own build/run lines before the command JSON, so clean stdout must be validated against the built binary rather than the Cargo wrapper.
   Evidence: `mise exec -- cargo run -p rbxsync -- extract-place ... --json` printed Cargo `Finished` and `Running` lines before the JSON, while `target/debug/rbxsync extract-place ... --json` printed only the JSON object.
+
+- Observation: The real-binary integration test can prove the core artifact path without Roblox Studio by chaining `extract-place` into `import-place`.
+  Evidence: `rbxsync-cli/tests/extract_place.rs::extract_place_writes_binary_place_and_reimports_project` writes a fixture project, exports `game.rbxl`, imports that artifact into a new project, and verifies `src/ServerScriptService/Main.server.luau` plus `src/Workspace/Baseplate.rbxjson` exist.
+
+- Observation: The cleanest publishing boundary for this MVP is to omit `--publish` entirely rather than expose a placeholder flag.
+  Evidence: `target/debug/rbxsync extract-place --help` lists local export flags only, and `INSTALL.md` plus `docs/cli/commands.md` now state that Roblox cloud publishing is not implemented by this workflow.
 
 ## Decision Log
 
@@ -79,6 +88,10 @@ Milestone 1 is complete. `rbxsync-core/src/place_exporter.rs` now owns the share
 Milestone 2 is complete. The exporter now has the richer project semantics needed by `extract-place`: it can discover roots from `treeMapping`, use metadata names instead of filesystem-safe names, unescape `[SLASH]`, apply attributes and tags, resolve `Ref` properties after all instances exist, and return structured diagnostics. The existing `rbxsync build` command still passes its CLI tests, so this deeper exporter behavior did not regress the current user-facing build path.
 
 Milestone 3 is complete. The user-facing `rbxsync extract-place` command now exists and delegates to the shared exporter. The command is place-focused, supports safe overwrite behavior through `--force`, supports dry-run and strict mode, emits clean machine-readable JSON when run as the built binary, and keeps authenticated publishing out of scope.
+
+Milestone 4 is complete. The CLI now has dedicated extract-place integration tests that run the actual `rbxsync` binary and cover the main artifact behaviors required by the plan: binary export, XML export, dry-run, output safety, format validation, and import/export/import preservation of supported scripts and metadata.
+
+Milestone 5 is complete. The command help is already concise, the local installation and command docs now show `extract-place` as the supported project-to-place workflow, and final focused plus workspace validation passes. The completed feature creates local `.rbxl` and `.rbxlx` artifacts and deliberately does not upload or publish to Roblox cloud services.
 
 ## Context and Orientation
 
@@ -268,3 +281,7 @@ At the end of the plan, `rbxsync-core/src/lib.rs` should export the main place e
 2026-05-10: Milestone 2 completed. The shared exporter now understands project config, tree mapping, metadata names, attributes, tags, package filtering, pending reference resolution, strict-mode diagnostics, and a broader importer-compatible property conversion surface.
 
 2026-05-10: Milestone 3 completed. The CLI now exposes `rbxsync extract-place` with safe local place export options, JSON/human summaries, dry-run support, service filtering, package inclusion controls, and format/output validation.
+
+2026-05-10: Milestone 4 completed. Added `rbxsync-cli/tests/extract_place.rs` and validated the new command through real-binary integration tests, including an export followed by `import-place` round trip.
+
+2026-05-10: Milestone 5 completed. Documented `extract-place` in local install and command docs, confirmed cloud publishing remains out of scope, ran final focused and workspace validation, and recorded the remaining non-failing MCP warning noise.

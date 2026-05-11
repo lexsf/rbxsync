@@ -104,6 +104,36 @@ rbxsync build --watch
 rbxsync build --plugin MyPlugin.rbxm
 ```
 
+### extract-place
+Export a RbxSync project to a local Roblox place file.
+
+```bash
+rbxsync extract-place [OPTIONS]
+```
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `-p, --path` | Current dir | Project directory |
+| `-o, --output` | build/game.rbxl | Output `.rbxl` or `.rbxlx` file |
+| `-f, --format` | Output extension or rbxl | Output format: rbxl or rbxlx |
+| `--force` | false | Replace an existing output file |
+| `--dry-run` | false | Validate and summarize without writing |
+| `--json` | false | Emit machine-readable JSON |
+| `--strict` | false | Fail if diagnostics are produced |
+| `--services` | All services | Comma-separated services to export |
+| `--no-packages` | false | Skip package folders |
+
+Examples:
+
+```bash
+rbxsync extract-place --path ./GameProject --output ./build/Game.rbxl --force
+rbxsync extract-place --path ./GameProject --output ./build/Game.rbxlx --force
+rbxsync extract-place --path ./GameProject --dry-run --json
+```
+
+This command creates local place files only. Publishing to Roblox cloud services
+is not implemented in this workflow.
+
 ### build-plugin
 Build the RbxSync Studio plugin.
 
