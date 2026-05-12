@@ -3,6 +3,7 @@
 //! Command-line interface for Roblox game extraction and synchronization.
 
 use std::collections::{BTreeMap, HashSet};
+use std::io::IsTerminal;
 use std::path::PathBuf;
 use std::sync::mpsc::channel;
 use std::time::Duration;
@@ -14,7 +15,8 @@ use rbxsync_core::{
     build_plugin, export_place, find_existing_rbxsync_plugin, find_rojo_project,
     get_studio_plugins_folder, import_place_file, install_plugin, parse_rojo_project,
     rojo_to_tree_mapping, write_serialized_instances, ExtractWriterOptions, PlaceExportFormat,
-    PlaceExportOptions, PlaceImportOptions, PluginBuildConfig, ProjectConfig,
+    PlaceExportOptions, PlaceImportOptions, PluginBuildConfig, ProjectConfig, PublishPlaceOptions,
+    PublishPlaceSummary, PublishVersionType,
 };
 use rbxsync_server::{run_server, ServerConfig};
 
@@ -230,6 +232,44 @@ enum Commands {
         /// Skip package folders in the exported place
         #[arg(long)]
         no_packages: bool,
+    },
+
+    /// Publish a .rbxl or .rbxlx place file to Roblox Open Cloud
+    PublishPlace {
+        /// Place file to publish (.rbxl or .rbxlx)
+        input: PathBuf,
+
+        /// Roblox universe ID that owns the target place
+        #[arg(long)]
+        universe_id: u64,
+
+        /// Roblox place ID to update
+        #[arg(long)]
+        place_id: u64,
+
+        /// Roblox Open Cloud API key (or use ROBLOX_OPEN_CLOUD_API_KEY)
+        #[arg(long)]
+        api_key: Option<String>,
+
+        /// Version type to create: published or saved
+        #[arg(long, default_value = "published")]
+        version_type: String,
+
+        /// Validate inputs and summarize without uploading
+        #[arg(long)]
+        dry_run: bool,
+
+        /// Emit a machine-readable JSON summary
+        #[arg(long)]
+        json: bool,
+
+        /// Suppress human-readable progress output
+        #[arg(short, long)]
+        quiet: bool,
+
+        /// Skip confirmation prompt before publishing
+        #[arg(short, long)]
+        yes: bool,
     },
 
     /// Import a .rbxl or .rbxlx place file into a RbxSync project
@@ -597,6 +637,8 @@ async fn main() -> Result<()> {
             | Commands::ImportPlace { quiet: true, .. }
             | Commands::ExtractPlace { json: true, .. }
             | Commands::ExtractPlace { quiet: true, .. }
+            | Commands::PublishPlace { json: true, .. }
+            | Commands::PublishPlace { quiet: true, .. }
     );
 
     // Initialize logging
@@ -713,6 +755,30 @@ async fn main() -> Result<()> {
                 strict,
                 services,
                 include_packages,
+            )
+            .await?;
+        }
+        Commands::PublishPlace {
+            input,
+            universe_id,
+            place_id,
+            api_key,
+            version_type,
+            dry_run,
+            json,
+            quiet,
+            yes,
+        } => {
+            cmd_publish_place(
+                input,
+                universe_id,
+                place_id,
+                api_key,
+                version_type,
+                dry_run,
+                json,
+                quiet,
+                yes,
             )
             .await?;
         }
@@ -1536,6 +1602,98 @@ fn resolve_extract_place_format(
         .unwrap_or(PlaceExportFormat::Rbxl))
 }
 
+#[allow(clippy::too_many_arguments)]
+async fn cmd_publish_place(
+    input: PathBuf,
+    universe_id: u64,
+    place_id: u64,
+    api_key: Option<String>,
+    version_type: String,
+    dry_run: bool,
+    json_output: bool,
+    quiet: bool,
+    yes: bool,
+) -> Result<()> {
+    let version_type = parse_publish_version_type(&version_type)?;
+    let api_key = resolve_publish_api_key(api_key)?;
+
+    if !dry_run {
+        confirm_publish_place(&input, universe_id, place_id, yes, json_output || quiet)?;
+    }
+
+    if !json_output && !quiet {
+        println!("Publishing place: {}", input.display());
+        println!("Universe ID: {}", universe_id);
+        println!("Place ID: {}", place_id);
+        println!("Version type: {}", version_type.as_query_value());
+    }
+
+    let summary = rbxsync_core::publish_place(PublishPlaceOptions {
+        input_path: input,
+        universe_id,
+        place_id,
+        api_key,
+        version_type,
+        dry_run,
+    })
+    .await?;
+
+    if json_output || !quiet {
+        print_publish_summary(json_output, &summary)?;
+    }
+
+    Ok(())
+}
+
+fn parse_publish_version_type(value: &str) -> Result<PublishVersionType> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "published" | "publish" => Ok(PublishVersionType::Published),
+        "saved" | "save" => Ok(PublishVersionType::Saved),
+        _ => bail!("--version-type must be either published or saved"),
+    }
+}
+
+fn resolve_publish_api_key(api_key: Option<String>) -> Result<String> {
+    let key = api_key
+        .or_else(|| std::env::var("ROBLOX_OPEN_CLOUD_API_KEY").ok())
+        .unwrap_or_default();
+    if key.trim().is_empty() {
+        bail!("Open Cloud API key is required. Pass --api-key or set ROBLOX_OPEN_CLOUD_API_KEY.");
+    }
+    Ok(key)
+}
+
+fn confirm_publish_place(
+    input: &std::path::Path,
+    universe_id: u64,
+    place_id: u64,
+    yes: bool,
+    non_interactive_output: bool,
+) -> Result<()> {
+    if yes {
+        return Ok(());
+    }
+
+    if non_interactive_output || !std::io::stdin().is_terminal() {
+        bail!("Publishing updates a live Roblox place. Re-run with --yes to confirm in CI or non-interactive use.");
+    }
+
+    println!(
+        "Publish {} to universe {} place {}? This updates a live Roblox place.",
+        input.display(),
+        universe_id,
+        place_id
+    );
+    println!("Type 'yes' to continue:");
+    let mut confirmation = String::new();
+    std::io::stdin().read_line(&mut confirmation)?;
+    if confirmation.trim() != "yes" {
+        bail!("Publish cancelled");
+    }
+
+    Ok(())
+}
+
 fn imported_services(instances: &[serde_json::Value]) -> Vec<String> {
     let mut services = instances
         .iter()
@@ -1771,6 +1929,78 @@ fn print_export_summary(
 
 fn export_diagnostic_summary(
     diagnostics: &[rbxsync_core::PlaceExportDiagnostic],
+) -> BTreeMap<String, usize> {
+    let mut summary = BTreeMap::new();
+    for diagnostic in diagnostics {
+        let key = serde_json::to_value(&diagnostic.kind)
+            .ok()
+            .and_then(|value| value.as_str().map(str::to_string))
+            .unwrap_or_else(|| format!("{:?}", diagnostic.kind));
+        *summary.entry(key).or_insert(0) += 1;
+    }
+    summary
+}
+
+fn print_publish_summary(json_output: bool, summary: &PublishPlaceSummary) -> Result<()> {
+    if json_output {
+        let diagnostic_summary = publish_diagnostic_summary(&summary.diagnostics);
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "success": true,
+                "command": "publish-place",
+                "dryRun": summary.dry_run,
+                "input": summary.input_path,
+                "universeId": summary.universe_id,
+                "placeId": summary.place_id,
+                "format": summary.format,
+                "contentType": summary.content_type,
+                "bytes": summary.bytes,
+                "versionType": summary.version_type.as_query_value(),
+                "versionNumber": summary.version_number,
+                "diagnostics": summary.diagnostics,
+                "diagnosticCount": summary.diagnostics.len(),
+                "diagnosticSummary": diagnostic_summary,
+            }))?
+        );
+        return Ok(());
+    }
+
+    if summary.dry_run {
+        println!("Dry run: no place file uploaded");
+    } else {
+        println!("Published place: {}", summary.input_path.display());
+    }
+    println!("Format: {}", summary.format);
+    println!("Universe ID: {}", summary.universe_id);
+    println!("Place ID: {}", summary.place_id);
+    println!("Version type: {}", summary.version_type.as_query_value());
+    println!("Size: {:.1} KB", summary.bytes as f64 / 1024.0);
+    if let Some(version_number) = summary.version_number {
+        println!("Version number: {}", version_number);
+    }
+
+    if !summary.diagnostics.is_empty() {
+        let diagnostic_summary = publish_diagnostic_summary(&summary.diagnostics);
+        let grouped = diagnostic_summary
+            .iter()
+            .map(|(kind, count)| format!("{}={}", kind, count))
+            .collect::<Vec<_>>()
+            .join(", ");
+        println!("Warnings: {} ({})", summary.diagnostics.len(), grouped);
+        for diagnostic in summary.diagnostics.iter().take(5) {
+            println!("  - {:?}: {}", diagnostic.kind, diagnostic.message);
+        }
+        if summary.diagnostics.len() > 5 {
+            println!("  ... {} more", summary.diagnostics.len() - 5);
+        }
+    }
+
+    Ok(())
+}
+
+fn publish_diagnostic_summary(
+    diagnostics: &[rbxsync_core::PublishPlaceDiagnostic],
 ) -> BTreeMap<String, usize> {
     let mut summary = BTreeMap::new();
     for diagnostic in diagnostics {

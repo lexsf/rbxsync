@@ -131,8 +131,39 @@ rbxsync extract-place --path ./GameProject --output ./build/Game.rbxlx --force
 rbxsync extract-place --path ./GameProject --dry-run --json
 ```
 
-This command creates local place files only. Publishing to Roblox cloud services
-is not implemented in this workflow.
+This command creates local place files only. Use `publish-place` to upload the
+artifact to Roblox Open Cloud.
+
+### publish-place
+Publish an existing `.rbxl` or `.rbxlx` place file to Roblox Open Cloud.
+
+```bash
+rbxsync publish-place <INPUT> --universe-id <ID> --place-id <ID> [OPTIONS]
+```
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `<INPUT>` | Required | Place file to publish |
+| `--universe-id` | Required | Roblox universe ID that owns the place |
+| `--place-id` | Required | Roblox place ID to update |
+| `--api-key` | `ROBLOX_OPEN_CLOUD_API_KEY` | Roblox Open Cloud API key |
+| `--version-type` | published | Version type: published or saved |
+| `--dry-run` | false | Validate and summarize without uploading |
+| `--json` | false | Emit machine-readable JSON |
+| `--quiet` | false | Suppress human-readable output |
+| `--yes` | false | Confirm upload for CI/non-interactive use |
+
+Examples:
+
+```bash
+export ROBLOX_OPEN_CLOUD_API_KEY="your-open-cloud-api-key"
+rbxsync publish-place ./build/Game.rbxl --universe-id 123456 --place-id 789012 --dry-run --json
+rbxsync publish-place ./build/Game.rbxl --universe-id 123456 --place-id 789012 --yes
+rbxsync publish-place ./build/Game.rbxlx --universe-id 123456 --place-id 789012 --version-type saved --yes
+```
+
+The command never prints the API key in summaries. Real uploads update a live
+Roblox place; use `--dry-run` first in scripts and `--yes` only when ready.
 
 ### build-plugin
 Build the RbxSync Studio plugin.

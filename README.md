@@ -157,6 +157,7 @@ rbxsync build --plugin MyPlugin.rbxm # Build directly to Studio plugins folder
 rbxsync build -o output.rbxl         # Specify output path
 rbxsync import-place Game.rbxl       # Convert a place file into project files
 rbxsync extract-place -o Game.rbxl   # Export project files to a place file
+rbxsync publish-place Game.rbxl --universe-id 123 --place-id 456 --yes # Upload a place file
 ```
 
 ### Utility Commands

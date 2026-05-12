@@ -137,7 +137,34 @@ Notes:
 - `--dry-run` validates and summarizes without writing a place file.
 - `--json` prints a machine-readable summary including diagnostics.
 - `extract-place` creates local `.rbxl` or `.rbxlx` files. It does not publish
-  to Roblox cloud services.
+  to Roblox cloud services; use `publish-place` for that separate upload step.
+
+## Publish a Place File
+
+Use `publish-place` to upload an existing `.rbxl` or `.rbxlx` file to Roblox
+Open Cloud. This updates a live Roblox place, so the command requires explicit
+confirmation with `--yes` for non-interactive use.
+
+```bash
+export ROBLOX_OPEN_CLOUD_API_KEY="your-open-cloud-api-key"
+rbxsync publish-place ./GameProject/build/game.rbxl --universe-id 123456 --place-id 789012 --yes
+```
+
+Useful publish options:
+
+```bash
+rbxsync publish-place ./GameProject/build/game.rbxl --universe-id 123456 --place-id 789012 --dry-run --json
+rbxsync publish-place ./GameProject/build/game.rbxlx --universe-id 123456 --place-id 789012 --version-type saved --yes
+rbxsync publish-place ./GameProject/build/game.rbxl --universe-id 123456 --place-id 789012 --api-key "$ROBLOX_OPEN_CLOUD_API_KEY" --yes
+```
+
+Notes:
+
+- `--api-key` overrides `ROBLOX_OPEN_CLOUD_API_KEY`.
+- `--dry-run` validates inputs and summarizes without uploading.
+- `--json` prints a machine-readable summary and never includes the API key.
+- `--version-type published` is the default; use `saved` when you do not want
+  to publish the uploaded version immediately.
 
 The older `build` command remains available for generic artifact creation,
 including `.rbxm` and `.rbxmx` model outputs:
@@ -186,4 +213,5 @@ rbxsync import-place ./Game.rbxl --output ./GameProject --force --json
 ```
 
 Published `--place-id` import and cloud publishing are not implemented in this
-local-file workflow.
+local import workflow. Use `publish-place` to upload an existing local place
+artifact.

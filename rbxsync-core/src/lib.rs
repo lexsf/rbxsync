@@ -13,6 +13,7 @@ pub mod obfuscator;
 pub mod path_utils;
 pub mod place_exporter;
 pub mod place_importer;
+pub mod place_publisher;
 pub mod plugin_builder;
 pub mod rojo;
 pub mod types;
@@ -30,6 +31,12 @@ pub use place_exporter::{
 pub use place_importer::{
     import_place_file, ImportDiagnostic, ImportDiagnosticKind, PlaceFileFormat, PlaceImportOptions,
     PlaceImportResult,
+};
+pub use place_publisher::{
+    publish_place, publish_place_url, publish_place_with_transport, PublishPlaceDiagnostic,
+    PublishPlaceDiagnosticKind, PublishPlaceFormat, PublishPlaceHttpRequest,
+    PublishPlaceHttpResponse, PublishPlaceOptions, PublishPlaceSummary, PublishPlaceTransport,
+    PublishVersionType, ReqwestPublishPlaceTransport,
 };
 pub use plugin_builder::{
     build_plugin, build_plugin_with_stats, find_existing_rbxsync_plugin, get_studio_plugins_folder,
