@@ -422,6 +422,11 @@ function TerrainHandler.applyTerrain(data: TerrainData): (boolean, number)
         return false, 0
     end
 
+    if type(data) == "table" and ((data :: any).format == "rawProperties" or (data :: any).voxelProperties ~= nil) then
+        warn("[RbxSync] Raw terrain manifests require local place export/import; Studio WriteVoxels sync cannot apply this format yet")
+        return false, 0
+    end
+
     if not data or not data.chunks or #data.chunks == 0 then
         return true, 0 -- No terrain data, success with 0 chunks
     end

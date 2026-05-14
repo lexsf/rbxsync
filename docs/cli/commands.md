@@ -117,7 +117,7 @@ rbxsync import-place <INPUT> [OPTIONS]
 | `-o, --output` | Current dir | Output project directory |
 | `--name` | Input stem | Project name for generated config |
 | `--services` | All services | Comma-separated services to import |
-| `--terrain` | false | Include Terrain metadata instances |
+| `--terrain` | false | Include Terrain metadata and exportable raw Terrain payloads |
 | `--force` | false | Replace an existing `src/` tree |
 | `--no-backup` | false | Replace `src/` without `.rbxsync-backup/src` |
 | `--tooling` / `--no-tooling` | Project config | Control generated tooling files |
@@ -130,6 +130,12 @@ rbxsync import-place <INPUT> [OPTIONS]
 payloads to `assets/blobs/` and records them in `assets/manifest.json`.
 External `Content` asset IDs are preserved as references and are not
 downloaded.
+
+`--terrain` preserves raw `Workspace/Terrain` payload properties exposed by the
+local place parser. Exportable payloads are written to
+`terrain/Workspace/Terrain.rbxterrain.json` and `terrain/blobs/<sha256>.bin`;
+ordinary Terrain metadata remains under `src/Workspace/Terrain.rbxjson` or
+`src/Workspace/Terrain/_meta.rbxjson`.
 
 ### extract-place
 Export a RbxSync project to a local Roblox place file.
@@ -163,6 +169,29 @@ rbxsync extract-place --path ./GameProject --include-assets --output ./build/Gam
 
 This command creates local place files only. Use `publish-place` to upload the
 artifact to Roblox Open Cloud.
+
+If `terrain/Workspace/Terrain.rbxterrain.json` exists and `Workspace` is included
+by the service filter, `extract-place` automatically embeds the referenced raw
+Terrain payloads into the generated `.rbxl` or `.rbxlx`. Missing payload files,
+hash mismatches, paths outside the project, and invalid raw terrain manifests
+fail the export to avoid silently dropping terrain data. Legacy Studio chunk
+terrain at `src/Workspace/Terrain/terrain.rbxjson` is reported as unsupported
+for place-file export until a converter exists.
+
+When terrain is involved, `--json` includes a `terrain` object:
+
+```json
+{
+  "mode": "rawProperties",
+  "manifest": "terrain/Workspace/Terrain.rbxterrain.json",
+  "rawPayloads": 1,
+  "chunkCount": null,
+  "bytesRead": 12345,
+  "bytesWritten": 0,
+  "diagnosticCount": 0,
+  "diagnostics": []
+}
+```
 
 ### publish-place
 Publish an existing `.rbxl` or `.rbxlx` place file to Roblox Open Cloud.

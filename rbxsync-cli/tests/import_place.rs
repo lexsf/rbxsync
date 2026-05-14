@@ -1,6 +1,9 @@
 use std::path::Path;
 use std::process::Command;
 
+use rbx_dom_weak::types::BinaryString;
+use rbx_dom_weak::{InstanceBuilder, WeakDom};
+
 fn rbxsync() -> &'static str {
     env!("CARGO_BIN_EXE_rbxsync")
 }
@@ -120,6 +123,80 @@ fn build_place(source_project: &Path, output: &Path, format: &str) {
 
     assert!(status.success(), "build command failed");
     assert!(output.exists(), "build output missing");
+}
+
+fn write_terrain_place(output: &Path) {
+    let mut dom = WeakDom::new(InstanceBuilder::new("DataModel").with_name("game"));
+    let root = dom.root_ref();
+    let workspace = dom.insert(root, InstanceBuilder::new("Workspace"));
+    dom.insert(
+        workspace,
+        InstanceBuilder::new("Terrain")
+            .with_name("Terrain")
+            .with_property("SmoothGrid", BinaryString::from(vec![1, 2, 3, 4, 5]))
+            .with_property("Decoration", true),
+    );
+    let refs = dom.root().children().to_vec();
+    let file = std::fs::File::create(output).expect("terrain place file");
+    rbx_binary::to_writer(file, &dom, &refs).expect("write terrain place");
+}
+
+#[test]
+fn import_place_terrain_writes_manifest_and_blobs() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let place_file = temp.path().join("terrain.rbxl");
+    let imported_project = temp.path().join("imported");
+    write_terrain_place(&place_file);
+
+    let output = command()
+        .args([
+            "import-place",
+            place_file.to_str().unwrap(),
+            "--output",
+            imported_project.to_str().unwrap(),
+            "--force",
+            "--terrain",
+            "--json",
+        ])
+        .output()
+        .expect("run import-place terrain");
+
+    assert!(
+        output.status.success(),
+        "import-place failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let summary: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("clean json stdout");
+    assert_eq!(summary["success"], true);
+    assert_eq!(summary["terrain"]["mode"], "rawProperties");
+    assert_eq!(summary["terrain"]["rawPayloads"], 1);
+    assert!(summary["terrain"]["bytesWritten"].as_u64().unwrap() >= 5);
+    assert_eq!(summary["terrain"]["diagnosticCount"], 0);
+    assert_eq!(summary["diagnosticCount"], 0);
+
+    let manifest_path = imported_project.join("terrain/Workspace/Terrain.rbxterrain.json");
+    assert!(manifest_path.exists(), "terrain manifest missing");
+    let manifest: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&manifest_path).expect("terrain manifest"))
+            .expect("terrain manifest json");
+    assert_eq!(manifest["format"], "rawProperties");
+    let blob_file = manifest["voxelProperties"]["SmoothGrid"]["file"]
+        .as_str()
+        .expect("terrain blob file");
+    assert_eq!(
+        std::fs::read(imported_project.join(blob_file)).expect("terrain blob"),
+        vec![1, 2, 3, 4, 5]
+    );
+
+    let terrain_metadata: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(imported_project.join("src/Workspace/Terrain.rbxjson"))
+            .expect("terrain metadata"),
+    )
+    .expect("terrain metadata json");
+    assert!(terrain_metadata["properties"].get("SmoothGrid").is_none());
+    assert_eq!(terrain_metadata["properties"]["Decoration"]["value"], true);
 }
 
 #[test]

@@ -1,6 +1,7 @@
 # File Formats
 
-RbxSync uses two file formats to represent Roblox instances.
+RbxSync uses text metadata plus optional local payload files to represent Roblox
+instances and large binary data.
 
 ## Overview
 
@@ -8,6 +9,7 @@ RbxSync uses two file formats to represent Roblox instances.
 |--------|-----------|----------|
 | Luau Scripts | `.luau` | Script source code |
 | Instance Data | `.rbxjson` | Properties and metadata |
+| Terrain Manifest | `.rbxterrain.json` | Raw local place Terrain payload references |
 
 ## Script Files
 
@@ -37,13 +39,28 @@ Non-script instances use `.rbxjson` for full property preservation:
 
 See [.rbxjson Format](/file-formats/rbxjson) for details.
 
+## Terrain Files
+
+Local place terrain round trips use a top-level `terrain/` directory. The
+canonical manifest for `Workspace/Terrain` is
+`terrain/Workspace/Terrain.rbxterrain.json`, and raw payload bytes live under
+`terrain/blobs/<sha256>.bin`.
+
+See [Terrain Files](/file-formats/terrain) for details.
+
 ## Project Structure
 
 ```
 MyGame/
 ├── rbxsync.json          # Project config
+├── terrain/
+│   ├── Workspace/
+│   │   └── Terrain.rbxterrain.json
+│   └── blobs/
+│       └── <sha256>.bin
 ├── src/
 │   ├── Workspace/
+│   │   ├── Terrain.rbxjson
 │   │   ├── Baseplate.rbxjson
 │   │   └── SpawnLocation.rbxjson
 │   ├── ServerScriptService/

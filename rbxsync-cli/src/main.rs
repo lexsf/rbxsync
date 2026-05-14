@@ -15,9 +15,10 @@ use rbxsync_core::{
     build_plugin, discover_assets, export_place, extract_embedded_assets,
     find_existing_rbxsync_plugin, find_rojo_project, get_studio_plugins_folder, import_place_file,
     install_plugin, parse_rojo_project, rojo_to_tree_mapping, summarize_assets,
-    write_serialized_instances, AssetMode, AssetSummary, ExtractWriterOptions, PlaceExportFormat,
-    PlaceExportOptions, PlaceImportOptions, PluginBuildConfig, ProjectConfig, PublishPlaceOptions,
-    PublishPlaceSummary, PublishVersionType,
+    summarize_raw_terrain, write_raw_terrain_extraction, write_serialized_instances, AssetMode,
+    AssetSummary, ExtractWriterOptions, PlaceExportFormat, PlaceExportOptions, PlaceImportOptions,
+    PluginBuildConfig, ProjectConfig, PublishPlaceOptions, PublishPlaceSummary, PublishVersionType,
+    TerrainProjectFileKind, TerrainSummary,
 };
 use rbxsync_server::{run_server, ServerConfig};
 
@@ -1411,6 +1412,14 @@ async fn cmd_import_place(
     } else {
         None
     };
+    let dry_run_terrain_summary = import_result.terrain.as_ref().map(|terrain| {
+        let bytes = terrain
+            .blobs
+            .iter()
+            .map(|blob| blob.bytes.len() as u64)
+            .sum();
+        summarize_raw_terrain(&project_dir, &terrain.data, 0, bytes)
+    });
 
     if dry_run {
         if json_output || !quiet {
@@ -1430,6 +1439,7 @@ async fn cmd_import_place(
                 false,
                 backup_existing_src,
                 dry_run_asset_summary.as_ref(),
+                dry_run_terrain_summary.as_ref(),
             )?;
         }
         return Ok(());
@@ -1472,6 +1482,12 @@ async fn cmd_import_place(
         (import_result.instances.clone(), None)
     };
 
+    let terrain_summary = if let Some(terrain) = import_result.terrain.as_ref() {
+        Some(write_raw_terrain_extraction(&project_dir, terrain)?)
+    } else {
+        None
+    };
+
     let (preserve_packages, packages_folder) = package_writer_options(&config);
     let writer_summary = write_serialized_instances(
         instances_to_write,
@@ -1503,6 +1519,7 @@ async fn cmd_import_place(
             writer_summary.packages_preserved,
             backup_existing_src,
             asset_summary.as_ref(),
+            terrain_summary.as_ref(),
         )?;
     }
 
@@ -1807,6 +1824,7 @@ fn print_import_summary(
     packages_preserved: bool,
     backup_existing_src: bool,
     asset_summary: Option<&AssetSummary>,
+    terrain_summary: Option<&TerrainSummary>,
 ) -> Result<()> {
     if json_output {
         let diagnostic_summary = diagnostic_summary(diagnostics);
@@ -1831,6 +1849,7 @@ fn print_import_summary(
                 "packagesPreserved": packages_preserved,
                 "backupExistingSrc": backup_existing_src,
                 "assets": asset_summary,
+                "terrain": terrain_summary,
             }))?
         );
         return Ok(());
@@ -1873,6 +1892,10 @@ fn print_import_summary(
 
     if let Some(asset_summary) = asset_summary {
         print_asset_summary(asset_summary);
+    }
+
+    if let Some(terrain_summary) = terrain_summary {
+        print_terrain_summary(terrain_summary);
     }
 
     if !diagnostics.is_empty() {
@@ -1943,6 +1966,7 @@ fn print_export_summary(
                 "diagnosticCount": summary.diagnostics.len(),
                 "diagnosticSummary": diagnostic_summary,
                 "assets": summary.asset_summary,
+                "terrain": summary.terrain_summary,
             }))?
         );
         return Ok(());
@@ -1969,6 +1993,10 @@ fn print_export_summary(
 
     if let Some(asset_summary) = summary.asset_summary.as_ref() {
         print_asset_summary(asset_summary);
+    }
+
+    if let Some(terrain_summary) = summary.terrain_summary.as_ref() {
+        print_terrain_summary(terrain_summary);
     }
 
     if !summary.diagnostics.is_empty() {
@@ -2013,6 +2041,28 @@ fn print_asset_summary(summary: &AssetSummary) {
             "Wrote {} asset files ({:.1} KB)",
             summary.files_written,
             summary.bytes_written as f64 / 1024.0
+        );
+    }
+}
+
+fn print_terrain_summary(summary: &TerrainSummary) {
+    println!(
+        "Terrain: mode={:?}, raw payloads={}",
+        summary.mode, summary.raw_payloads
+    );
+    if let Some(manifest) = &summary.manifest {
+        println!("Terrain manifest: {}", manifest);
+    }
+    if summary.bytes_written > 0 {
+        println!(
+            "Wrote terrain payloads ({:.1} KB)",
+            summary.bytes_written as f64 / 1024.0
+        );
+    }
+    if summary.bytes_read > 0 {
+        println!(
+            "Read terrain payloads ({:.1} KB)",
+            summary.bytes_read as f64 / 1024.0
         );
     }
 }
@@ -2692,18 +2742,21 @@ async fn cmd_sync(path: Option<PathBuf>, delete: bool) -> Result<()> {
         }
     }
 
-    // Check for terrain data and sync if present
-    let terrain_file = project_dir
-        .join("src")
-        .join("Workspace")
-        .join("Terrain")
-        .join("terrain.rbxjson");
-    if terrain_file.exists() {
+    // Check for Studio-compatible terrain data and sync if present.
+    if let Some(terrain_file) = rbxsync_core::find_studio_sync_terrain_file(&project_dir) {
+        if terrain_file.kind == TerrainProjectFileKind::RawProperties {
+            println!(
+                "\x1b[33m⚠ Raw terrain manifest found at {}; Studio terrain sync cannot apply raw place terrain yet. Use extract-place/import-place for raw terrain round trips.\x1b[0m",
+                terrain_file.project_relative_path
+            );
+            return Ok(());
+        }
+
         println!("Syncing terrain...");
 
         // Read terrain data
         let terrain_json =
-            std::fs::read_to_string(&terrain_file).context("Failed to read terrain file")?;
+            std::fs::read_to_string(&terrain_file.path).context("Failed to read terrain file")?;
         let terrain_data: serde_json::Value =
             serde_json::from_str(&terrain_json).context("Failed to parse terrain file")?;
 

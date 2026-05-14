@@ -105,3 +105,24 @@ Run `rbxsync fmt-project` to format all .rbxjson files consistently.
 For CI/CD, use `rbxsync fmt-project --check` to verify formatting.
 
 See [Property Types](/file-formats/property-types) for all supported types.
+
+## Terrain Metadata
+
+`Workspace/Terrain` may still have ordinary `.rbxjson` metadata for supported
+properties such as water settings or `Decoration`:
+
+```json
+{
+  "className": "Terrain",
+  "properties": {
+    "Decoration": { "type": "bool", "value": true }
+  }
+}
+```
+
+Raw Terrain voxel payloads are not stored inline in `.rbxjson`. When
+`import-place --terrain` can preserve exportable Terrain binary properties, it
+writes those payloads to the terrain format instead:
+`terrain/Workspace/Terrain.rbxterrain.json` plus `terrain/blobs/<sha256>.bin`.
+See [Terrain Files](/file-formats/terrain) for the manifest format and
+round-trip behavior.

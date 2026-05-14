@@ -18,8 +18,11 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::{
-    is_package_path, load_asset_manifest, read_asset_file, summarize_assets, AssetFileErrorKind,
-    AssetMode, AssetSummary, ProjectConfig,
+    canonical_terrain_manifest, is_package_path, legacy_flat_terrain_chunk_file,
+    legacy_terrain_chunk_file, load_asset_manifest, read_asset_file, read_raw_terrain_data,
+    summarize_assets, summarize_raw_terrain, AssetFileErrorKind, AssetMode, AssetSummary,
+    ProjectConfig, RawTerrainData, TerrainDiagnostic, TerrainDiagnosticKind, TerrainPayloadRef,
+    TerrainPayloadType, TerrainSummary, TerrainSummaryMode,
 };
 
 /// Roblox artifact format produced from project files.
@@ -109,6 +112,10 @@ pub enum PlaceExportDiagnosticKind {
     InvalidAssetManifest,
     AssetHashMismatch,
     AssetPathOutsideProject,
+    InvalidTerrainManifest,
+    MissingTerrainPayload,
+    TerrainPayloadHashMismatch,
+    TerrainPayloadOutsideProject,
 }
 
 /// Non-fatal exporter diagnostic.
@@ -132,6 +139,7 @@ pub struct PlaceExportSummary {
     pub bytes_written: Option<u64>,
     pub diagnostics: Vec<PlaceExportDiagnostic>,
     pub asset_summary: Option<AssetSummary>,
+    pub terrain_summary: Option<TerrainSummary>,
 }
 
 #[derive(Debug)]
@@ -196,14 +204,21 @@ pub fn export_place(options: PlaceExportOptions) -> Result<PlaceExportSummary> {
     diagnostics.extend(validate_tree_mapping(&options));
     let asset_summary = summarize_manifest_assets(&options, &mut diagnostics);
     let BuildResult {
-        dom,
+        mut dom,
         diagnostics: build_diagnostics,
     } = build_project_dom(options.clone())?;
     diagnostics.extend(build_diagnostics);
+    let terrain_summary = apply_project_terrain(&mut dom, &options, &mut diagnostics)?;
 
     if let Some(diagnostic) = first_fatal_asset_diagnostic(&diagnostics) {
         bail!(
             "Export failed with asset diagnostic: {}",
+            diagnostic.message
+        );
+    }
+    if let Some(diagnostic) = first_fatal_terrain_diagnostic(&diagnostics) {
+        bail!(
+            "Export failed with terrain diagnostic: {}",
             diagnostic.message
         );
     }
@@ -216,7 +231,7 @@ pub fn export_place(options: PlaceExportOptions) -> Result<PlaceExportSummary> {
         );
     }
 
-    let mut summary = summarize_dom(&dom, &options, diagnostics, asset_summary);
+    let mut summary = summarize_dom(&dom, &options, diagnostics, asset_summary, terrain_summary);
 
     if !options.dry_run {
         write_dom(&dom, &options)?;
@@ -230,7 +245,28 @@ pub fn export_place(options: PlaceExportOptions) -> Result<PlaceExportSummary> {
 
 /// Build a Roblox DOM from an RbxSync source tree.
 pub fn build_dom_from_project(options: &PlaceExportOptions) -> Result<WeakDom> {
-    Ok(build_project_dom(options.clone())?.dom)
+    let BuildResult {
+        mut dom,
+        diagnostics: build_diagnostics,
+    } = build_project_dom(options.clone())?;
+    let mut diagnostics = build_diagnostics;
+    apply_project_terrain(&mut dom, options, &mut diagnostics)?;
+
+    if let Some(diagnostic) = first_fatal_terrain_diagnostic(&diagnostics) {
+        bail!(
+            "Export failed with terrain diagnostic: {}",
+            diagnostic.message
+        );
+    }
+    if options.strict && !diagnostics.is_empty() {
+        bail!(
+            "Export failed in strict mode with {} diagnostic(s): {}",
+            diagnostics.len(),
+            diagnostics[0].message
+        );
+    }
+
+    Ok(dom)
 }
 
 fn apply_project_config(
@@ -401,6 +437,7 @@ fn summarize_dom(
     options: &PlaceExportOptions,
     diagnostics: Vec<PlaceExportDiagnostic>,
     asset_summary: Option<AssetSummary>,
+    terrain_summary: Option<TerrainSummary>,
 ) -> PlaceExportSummary {
     let mut instances = 0;
     let mut scripts = 0;
@@ -423,6 +460,274 @@ fn summarize_dom(
         bytes_written: None,
         diagnostics,
         asset_summary,
+        terrain_summary,
+    }
+}
+
+fn apply_project_terrain(
+    dom: &mut WeakDom,
+    options: &PlaceExportOptions,
+    diagnostics: &mut Vec<PlaceExportDiagnostic>,
+) -> Result<Option<TerrainSummary>> {
+    if !service_selected("Workspace", options.services.as_ref()) {
+        return Ok(None);
+    }
+
+    let raw_manifest = canonical_terrain_manifest(&options.project_dir, "Workspace/Terrain");
+    if raw_manifest.exists() {
+        let raw = match read_raw_terrain_data(&raw_manifest) {
+            Ok(raw) => raw,
+            Err(error) => {
+                let message = error.to_string();
+                diagnostics.push(PlaceExportDiagnostic {
+                    kind: PlaceExportDiagnosticKind::InvalidTerrainManifest,
+                    path: raw_manifest.display().to_string(),
+                    property: None,
+                    message: message.clone(),
+                });
+                bail!("Export failed with terrain diagnostic: {}", message);
+            }
+        };
+
+        return apply_raw_terrain(dom, options, diagnostics, raw);
+    }
+
+    let legacy_path = [
+        legacy_terrain_chunk_file(&options.project_dir),
+        legacy_flat_terrain_chunk_file(&options.project_dir),
+    ]
+    .into_iter()
+    .find(|path| path.exists());
+
+    let Some(legacy_path) = legacy_path else {
+        return Ok(None);
+    };
+
+    let path = legacy_path.display().to_string();
+    let manifest = legacy_path
+        .strip_prefix(&options.project_dir)
+        .unwrap_or(&legacy_path)
+        .to_string_lossy()
+        .replace('\\', "/");
+
+    let (chunk_count, terrain_diagnostic) = match std::fs::read_to_string(&legacy_path)
+        .ok()
+        .and_then(|content| serde_json::from_str::<Value>(&content).ok())
+    {
+        Some(raw) => (
+            raw.get("chunks")
+                .and_then(Value::as_array)
+                .map(Vec::len)
+                .unwrap_or(0),
+            TerrainDiagnostic {
+                kind: TerrainDiagnosticKind::UnsupportedTerrainVoxelData,
+                path: path.clone(),
+                property: None,
+                message: "Studio chunk terrain cannot yet be converted to place-file terrain binary; exported place will contain Terrain metadata only".to_string(),
+            },
+        ),
+        None => (
+            0,
+            TerrainDiagnostic {
+                kind: TerrainDiagnosticKind::InvalidTerrainManifest,
+                path: path.clone(),
+                property: None,
+                message: format!("Failed to parse legacy terrain chunk data {}", legacy_path.display()),
+            },
+        ),
+    };
+
+    diagnostics.push(PlaceExportDiagnostic {
+        kind: match terrain_diagnostic.kind {
+            TerrainDiagnosticKind::InvalidTerrainManifest => {
+                PlaceExportDiagnosticKind::InvalidTerrainManifest
+            }
+            _ => PlaceExportDiagnosticKind::UnsupportedTerrainVoxelData,
+        },
+        path: terrain_diagnostic.path.clone(),
+        property: terrain_diagnostic.property.clone(),
+        message: terrain_diagnostic.message.clone(),
+    });
+
+    let terrain_diagnostics = vec![terrain_diagnostic];
+    Ok(Some(TerrainSummary {
+        mode: TerrainSummaryMode::Chunks,
+        manifest: Some(manifest),
+        raw_payloads: 0,
+        chunk_count: Some(chunk_count),
+        bytes_read: 0,
+        bytes_written: 0,
+        diagnostic_count: terrain_diagnostics.len(),
+        diagnostics: terrain_diagnostics,
+    }))
+}
+
+fn apply_raw_terrain(
+    dom: &mut WeakDom,
+    options: &PlaceExportOptions,
+    diagnostics: &mut Vec<PlaceExportDiagnostic>,
+    raw: RawTerrainData,
+) -> Result<Option<TerrainSummary>> {
+    let terrain_ref = ensure_workspace_terrain(dom, &raw);
+    {
+        let terrain = dom
+            .get_by_ref_mut(terrain_ref)
+            .context("Workspace/Terrain instance disappeared while applying terrain")?;
+        terrain.name = raw.name.clone();
+
+        for (property, value) in &raw.metadata_properties {
+            match terrain_metadata_variant(value) {
+                Some(value) => {
+                    terrain.properties.insert(property.clone(), value);
+                }
+                None => diagnostics.push(PlaceExportDiagnostic {
+                    kind: PlaceExportDiagnosticKind::UnsupportedProperty,
+                    path: raw.terrain_path.clone(),
+                    property: Some(property.clone()),
+                    message: format!("Unsupported Terrain metadata property '{}'", property),
+                }),
+            }
+        }
+
+        if !raw.material_colors.is_empty() {
+            match serde_json::to_value(&raw.material_colors)
+                .ok()
+                .and_then(|value| serde_json::from_value::<MaterialColors>(value).ok())
+            {
+                Some(colors) => {
+                    terrain.properties.insert(
+                        "MaterialColors".to_string(),
+                        Variant::MaterialColors(colors),
+                    );
+                }
+                None => diagnostics.push(PlaceExportDiagnostic {
+                    kind: PlaceExportDiagnosticKind::UnsupportedProperty,
+                    path: raw.terrain_path.clone(),
+                    property: Some("MaterialColors".to_string()),
+                    message: "Unsupported Terrain material colors manifest shape".to_string(),
+                }),
+            }
+        }
+    }
+
+    let mut bytes_read = 0;
+    for (property, payload) in &raw.voxel_properties {
+        let bytes = read_terrain_payload_for_export(
+            options,
+            &raw.terrain_path,
+            property,
+            payload,
+            diagnostics,
+        )?;
+        bytes_read += bytes.len() as u64;
+        let value = match payload.property_type {
+            TerrainPayloadType::BinaryString => Variant::BinaryString(BinaryString::from(bytes)),
+            TerrainPayloadType::SharedString => Variant::SharedString(SharedString::new(bytes)),
+        };
+        let terrain = dom
+            .get_by_ref_mut(terrain_ref)
+            .context("Workspace/Terrain instance disappeared while setting terrain payload")?;
+        terrain.properties.insert(property.clone(), value);
+    }
+
+    Ok(Some(summarize_raw_terrain(
+        &options.project_dir,
+        &raw,
+        bytes_read,
+        0,
+    )))
+}
+
+fn ensure_workspace_terrain(dom: &mut WeakDom, raw: &RawTerrainData) -> Ref {
+    let root_ref = dom.root_ref();
+    let workspace = find_child(dom, root_ref, |instance| {
+        instance.name == "Workspace" || instance.class == "Workspace"
+    })
+    .unwrap_or_else(|| {
+        dom.insert(
+            root_ref,
+            InstanceBuilder::new("Workspace").with_name("Workspace"),
+        )
+    });
+
+    find_child(dom, workspace, |instance| {
+        instance.name == raw.name || instance.class == "Terrain"
+    })
+    .unwrap_or_else(|| {
+        dom.insert(
+            workspace,
+            InstanceBuilder::new(raw.class_name.as_str()).with_name(raw.name.as_str()),
+        )
+    })
+}
+
+fn find_child(
+    dom: &WeakDom,
+    parent_ref: Ref,
+    predicate: impl Fn(&rbx_dom_weak::Instance) -> bool,
+) -> Option<Ref> {
+    let parent = dom.get_by_ref(parent_ref)?;
+    parent.children().iter().copied().find(|child_ref| {
+        dom.get_by_ref(*child_ref)
+            .is_some_and(|child| predicate(child))
+    })
+}
+
+fn read_terrain_payload_for_export(
+    options: &PlaceExportOptions,
+    terrain_path: &str,
+    property: &str,
+    payload: &TerrainPayloadRef,
+    diagnostics: &mut Vec<PlaceExportDiagnostic>,
+) -> Result<Vec<u8>> {
+    match read_asset_file(&options.project_dir, &payload.file, Some(&payload.sha256)) {
+        Ok(bytes) => Ok(bytes),
+        Err(error) => {
+            let kind = match error.kind() {
+                AssetFileErrorKind::Missing => PlaceExportDiagnosticKind::MissingTerrainPayload,
+                AssetFileErrorKind::OutsideProject => {
+                    PlaceExportDiagnosticKind::TerrainPayloadOutsideProject
+                }
+                AssetFileErrorKind::HashMismatch => {
+                    PlaceExportDiagnosticKind::TerrainPayloadHashMismatch
+                }
+            };
+            let message = error.to_string();
+            diagnostics.push(PlaceExportDiagnostic {
+                kind,
+                path: terrain_path.to_string(),
+                property: Some(property.to_string()),
+                message: message.clone(),
+            });
+            bail!("Export failed with terrain diagnostic: {}", message);
+        }
+    }
+}
+
+fn terrain_metadata_variant(value: &Value) -> Option<Variant> {
+    let obj = value.as_object()?;
+    let type_str = obj.get("type")?.as_str()?;
+    let val = obj.get("value").unwrap_or(&Value::Null);
+
+    match type_str {
+        "bool" => val.as_bool().map(Variant::Bool),
+        "int" | "int32" => val.as_i64().map(|value| Variant::Int32(value as i32)),
+        "int64" => val.as_i64().map(Variant::Int64),
+        "float" | "float32" => val.as_f64().map(|value| Variant::Float32(value as f32)),
+        "double" | "float64" => val.as_f64().map(Variant::Float64),
+        "string" => val.as_str().map(|value| Variant::String(value.to_string())),
+        "Vector3" => vector3(val).map(Variant::Vector3),
+        "Color3" => color3(val).map(Variant::Color3),
+        "Enum" => {
+            let enum_value = val
+                .as_object()
+                .and_then(|value| value.get("value"))
+                .unwrap_or(val);
+            Some(Variant::Enum(rbx_dom_weak::types::Enum::from_u32(
+                enum_value.as_u64().unwrap_or(0) as u32,
+            )))
+        }
+        _ => None,
     }
 }
 
@@ -468,6 +773,19 @@ fn first_fatal_asset_diagnostic(
             PlaceExportDiagnosticKind::MissingAssetFile
                 | PlaceExportDiagnosticKind::AssetHashMismatch
                 | PlaceExportDiagnosticKind::AssetPathOutsideProject
+        )
+    })
+}
+
+fn first_fatal_terrain_diagnostic(
+    diagnostics: &[PlaceExportDiagnostic],
+) -> Option<&PlaceExportDiagnostic> {
+    diagnostics.iter().find(|diagnostic| {
+        matches!(
+            diagnostic.kind,
+            PlaceExportDiagnosticKind::MissingTerrainPayload
+                | PlaceExportDiagnosticKind::TerrainPayloadHashMismatch
+                | PlaceExportDiagnosticKind::TerrainPayloadOutsideProject
         )
     })
 }
@@ -1510,6 +1828,8 @@ fn region3int16(value: &Value) -> Option<Region3int16> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::BTreeMap;
+
     use serde_json::json;
 
     fn options(project_dir: &Path) -> PlaceExportOptions {
@@ -1831,5 +2151,170 @@ mod tests {
         );
         assert_eq!(asset_summary.content_references, 1);
         assert_eq!(asset_summary.embedded_payloads, 0);
+    }
+
+    #[test]
+    fn embeds_raw_terrain_manifest_payloads() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let project = temp.path();
+        std::fs::create_dir_all(project.join("src/Workspace")).expect("workspace dir");
+
+        std::fs::write(
+            project.join("src/Workspace/Terrain.rbxjson"),
+            serde_json::to_string_pretty(&json!({
+                "className": "Terrain",
+                "properties": {
+                    "Decoration": { "type": "bool", "value": false }
+                }
+            }))
+            .unwrap(),
+        )
+        .expect("terrain metadata");
+
+        let bytes = vec![1, 2, 3, 4, 5];
+        let payload = crate::write_terrain_blob(project, &bytes).expect("terrain blob");
+        crate::write_raw_terrain_data(
+            project,
+            &RawTerrainData {
+                version: crate::TERRAIN_MANIFEST_VERSION,
+                format: crate::TerrainDataFormat::RawProperties,
+                terrain_path: "Workspace/Terrain".to_string(),
+                class_name: "Terrain".to_string(),
+                name: "Terrain".to_string(),
+                reference_id: None,
+                metadata_properties: BTreeMap::from([(
+                    "Decoration".to_string(),
+                    json!({ "type": "bool", "value": true }),
+                )]),
+                material_colors: BTreeMap::new(),
+                voxel_properties: BTreeMap::from([("SmoothGrid".to_string(), payload)]),
+                diagnostics: Vec::new(),
+            },
+        )
+        .expect("terrain manifest");
+
+        let dom = build_dom_from_project(&options(project)).expect("build dom");
+        let root = dom.root_ref();
+        let workspace = child_named(&dom, root, "Workspace");
+        let terrain = child_named(&dom, workspace, "Terrain");
+        let terrain = dom.get_by_ref(terrain).expect("terrain instance");
+
+        assert!(matches!(
+            terrain.properties.get("Decoration"),
+            Some(Variant::Bool(true))
+        ));
+        assert!(matches!(
+            terrain.properties.get("SmoothGrid"),
+            Some(Variant::BinaryString(value))
+                if <BinaryString as AsRef<[u8]>>::as_ref(value) == bytes.as_slice()
+        ));
+
+        let summary = export_place(options(project)).expect("export summary");
+        let terrain_summary = summary.terrain_summary.expect("terrain summary");
+        assert_eq!(terrain_summary.mode, TerrainSummaryMode::RawProperties);
+        assert_eq!(terrain_summary.raw_payloads, 1);
+        assert_eq!(terrain_summary.bytes_read, bytes.len() as u64);
+        assert_eq!(terrain_summary.diagnostic_count, 0);
+        assert_eq!(
+            terrain_summary.manifest.as_deref(),
+            Some("terrain/Workspace/Terrain.rbxterrain.json")
+        );
+    }
+
+    #[test]
+    fn raw_terrain_hash_mismatch_fails_export() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let project = temp.path();
+        std::fs::create_dir_all(project.join("src/Workspace")).expect("workspace dir");
+
+        let mut payload = crate::write_terrain_blob(project, &[1, 2, 3]).expect("terrain blob");
+        payload.sha256 = "0000".to_string();
+        crate::write_raw_terrain_data(
+            project,
+            &RawTerrainData {
+                version: crate::TERRAIN_MANIFEST_VERSION,
+                format: crate::TerrainDataFormat::RawProperties,
+                terrain_path: "Workspace/Terrain".to_string(),
+                class_name: "Terrain".to_string(),
+                name: "Terrain".to_string(),
+                reference_id: None,
+                metadata_properties: BTreeMap::new(),
+                material_colors: BTreeMap::new(),
+                voxel_properties: BTreeMap::from([("SmoothGrid".to_string(), payload)]),
+                diagnostics: Vec::new(),
+            },
+        )
+        .expect("terrain manifest");
+
+        let error = export_place(options(project)).expect_err("hash mismatch should fail");
+        assert!(error.to_string().contains("terrain diagnostic"));
+    }
+
+    #[test]
+    fn raw_terrain_respects_workspace_service_filter() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let project = temp.path();
+        std::fs::create_dir_all(project.join("src/ServerScriptService")).expect("server dir");
+
+        let mut payload = crate::write_terrain_blob(project, &[1, 2, 3]).expect("terrain blob");
+        payload.sha256 = "0000".to_string();
+        crate::write_raw_terrain_data(
+            project,
+            &RawTerrainData {
+                version: crate::TERRAIN_MANIFEST_VERSION,
+                format: crate::TerrainDataFormat::RawProperties,
+                terrain_path: "Workspace/Terrain".to_string(),
+                class_name: "Terrain".to_string(),
+                name: "Terrain".to_string(),
+                reference_id: None,
+                metadata_properties: BTreeMap::new(),
+                material_colors: BTreeMap::new(),
+                voxel_properties: BTreeMap::from([("SmoothGrid".to_string(), payload)]),
+                diagnostics: Vec::new(),
+            },
+        )
+        .expect("terrain manifest");
+
+        let mut options = options(project);
+        options.services = Some(HashSet::from(["ServerScriptService".to_string()]));
+        let summary = export_place(options).expect("export without workspace");
+        assert!(summary.terrain_summary.is_none());
+        assert_eq!(summary.services, vec!["ServerScriptService"]);
+    }
+
+    #[test]
+    fn legacy_chunk_terrain_reports_unsupported_export_diagnostic() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let project = temp.path();
+        std::fs::create_dir_all(project.join("src/Workspace/Terrain")).expect("terrain dir");
+        std::fs::write(
+            project.join("src/Workspace/Terrain/_meta.rbxjson"),
+            serde_json::to_string_pretty(&json!({
+                "className": "Terrain"
+            }))
+            .unwrap(),
+        )
+        .expect("terrain metadata");
+        std::fs::write(
+            project.join("src/Workspace/Terrain/terrain.rbxjson"),
+            serde_json::to_string_pretty(&json!({
+                "chunkSize": 32,
+                "resolution": 4,
+                "chunks": [{ "x": 0, "y": 0, "z": 0 }]
+            }))
+            .unwrap(),
+        )
+        .expect("legacy terrain");
+
+        let summary = export_place(options(project)).expect("export summary");
+        assert_eq!(
+            summary.diagnostics[0].kind,
+            PlaceExportDiagnosticKind::UnsupportedTerrainVoxelData
+        );
+        let terrain_summary = summary.terrain_summary.expect("terrain summary");
+        assert_eq!(terrain_summary.mode, TerrainSummaryMode::Chunks);
+        assert_eq!(terrain_summary.chunk_count, Some(1));
+        assert_eq!(terrain_summary.diagnostic_count, 1);
+        assert_eq!(terrain_summary.diagnostics.len(), 1);
     }
 }

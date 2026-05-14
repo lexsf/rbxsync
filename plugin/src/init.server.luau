@@ -1997,6 +1997,12 @@ local function handleCommand(command: string, payload: any)
         if not terrainData then
             return { success = false, error = "No terrain data provided" }
         end
+        if type(terrainData) == "table" and (terrainData.format == "rawProperties" or terrainData.voxelProperties ~= nil) then
+            return {
+                success = false,
+                error = "Raw terrain manifests require local place export/import; Studio WriteVoxels sync cannot apply this format yet"
+            }
+        end
 
         local clearFirst = payload.clear ~= false -- Default to clearing first
         if clearFirst then

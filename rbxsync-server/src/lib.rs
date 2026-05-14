@@ -31,6 +31,54 @@ fn normalize_path(path: &str) -> String {
     path.replace('\\', "/")
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sync_read_terrain_returns_legacy_chunks_for_studio() {
+        let temp = tempfile::tempdir().unwrap();
+        let project = temp.path();
+        let terrain_path = rbxsync_core::legacy_terrain_chunk_file(project);
+        std::fs::create_dir_all(terrain_path.parent().unwrap()).unwrap();
+        std::fs::write(&terrain_path, r#"{"chunks":[{"x":0,"y":0,"z":0}]}"#).unwrap();
+
+        let (status, body) = sync_read_terrain_response(project.to_str().unwrap());
+
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["success"], true);
+        assert_eq!(body["hasTerrain"], true);
+        assert_eq!(body["terrainFormat"], "chunks");
+        assert_eq!(body["manifest"], "src/Workspace/Terrain/terrain.rbxjson");
+        assert_eq!(body["terrain"]["chunks"].as_array().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn sync_read_terrain_reports_raw_manifest_warning() {
+        let temp = tempfile::tempdir().unwrap();
+        let project = temp.path();
+        let terrain_path = rbxsync_core::canonical_terrain_manifest(project, "Workspace/Terrain");
+        std::fs::create_dir_all(terrain_path.parent().unwrap()).unwrap();
+        std::fs::write(&terrain_path, "{}").unwrap();
+
+        let (status, body) = sync_read_terrain_response(project.to_str().unwrap());
+
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["success"], true);
+        assert_eq!(body["hasTerrain"], true);
+        assert_eq!(body["terrainFormat"], "rawProperties");
+        assert_eq!(
+            body["manifest"],
+            "terrain/Workspace/Terrain.rbxterrain.json"
+        );
+        assert!(body["terrain"].is_null());
+        assert!(body["warning"]
+            .as_str()
+            .unwrap()
+            .contains("cannot apply this format yet"));
+    }
+}
+
 /// Load project config from rbxsync.json
 fn load_project_config(project_dir: &str) -> Option<serde_json::Value> {
     let config_path = PathBuf::from(project_dir).join("rbxsync.json");
@@ -2762,57 +2810,61 @@ async fn handle_sync_read_tree(Json(req): Json<ReadTreeRequest>) -> impl IntoRes
 
 /// Read terrain data for sync
 async fn handle_sync_read_terrain(Json(req): Json<ReadTreeRequest>) -> impl IntoResponse {
-    // Try both possible terrain file locations
-    let terrain_file_v1 = PathBuf::from(&req.project_dir)
-        .join("src")
-        .join("Workspace")
-        .join("Terrain.rbxjson");
-    let terrain_file_v2 = PathBuf::from(&req.project_dir)
-        .join("src")
-        .join("Workspace")
-        .join("Terrain")
-        .join("terrain.rbxjson");
+    let (status, body) = sync_read_terrain_response(&req.project_dir);
+    (status, Json(body))
+}
 
-    let terrain_file = if terrain_file_v1.exists() {
-        terrain_file_v1
-    } else {
-        terrain_file_v2
-    };
-
-    if !terrain_file.exists() {
+fn sync_read_terrain_response(project_dir: &str) -> (StatusCode, serde_json::Value) {
+    let project_dir = PathBuf::from(project_dir);
+    let Some(terrain_file) = rbxsync_core::find_studio_sync_terrain_file(&project_dir) else {
         return (
             StatusCode::OK,
-            Json(serde_json::json!({
+            serde_json::json!({
                 "success": true,
                 "hasTerrain": false
-            })),
+            }),
         );
-    }
+    };
 
-    match std::fs::read_to_string(&terrain_file) {
+    if terrain_file.kind == rbxsync_core::TerrainProjectFileKind::RawProperties {
+        return (
+            StatusCode::OK,
+            serde_json::json!({
+                "success": true,
+                "hasTerrain": true,
+                "terrainFormat": terrain_file.kind.as_str(),
+                "manifest": terrain_file.project_relative_path,
+                "warning": "Raw terrain manifests require local place export/import; Studio WriteVoxels sync cannot apply this format yet"
+            }),
+        );
+    };
+
+    match std::fs::read_to_string(&terrain_file.path) {
         Ok(content) => match serde_json::from_str::<serde_json::Value>(&content) {
             Ok(terrain_data) => (
                 StatusCode::OK,
-                Json(serde_json::json!({
+                serde_json::json!({
                     "success": true,
                     "hasTerrain": true,
+                    "terrainFormat": terrain_file.kind.as_str(),
+                    "manifest": terrain_file.project_relative_path,
                     "terrain": terrain_data
-                })),
+                }),
             ),
             Err(e) => (
                 StatusCode::OK,
-                Json(serde_json::json!({
+                serde_json::json!({
                     "success": false,
                     "error": format!("Failed to parse terrain data: {}", e)
-                })),
+                }),
             ),
         },
         Err(e) => (
             StatusCode::OK,
-            Json(serde_json::json!({
+            serde_json::json!({
                 "success": false,
                 "error": format!("Failed to read terrain file: {}", e)
-            })),
+            }),
         ),
     }
 }

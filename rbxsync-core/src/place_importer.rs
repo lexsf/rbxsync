@@ -16,6 +16,8 @@ use rbx_dom_weak::WeakDom;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 
+use crate::{collect_raw_terrain_from_instance, RawTerrainExtraction};
+
 /// Supported Roblox place file formats.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -58,6 +60,7 @@ pub struct PlaceImportResult {
     pub instances: Vec<Value>,
     pub diagnostics: Vec<ImportDiagnostic>,
     pub format: PlaceFileFormat,
+    pub terrain: Option<RawTerrainExtraction>,
 }
 
 /// Import a local `.rbxl` or `.rbxlx` file.
@@ -100,6 +103,7 @@ fn import_dom(
 ) -> PlaceImportResult {
     let mut instances = Vec::new();
     let mut diagnostics = Vec::new();
+    let mut terrain = None;
     let root_ref = dom.root_ref();
 
     let root_children = dom.root().children().to_vec();
@@ -136,6 +140,7 @@ fn import_dom(
             options,
             &mut instances,
             &mut diagnostics,
+            &mut terrain,
         );
     }
 
@@ -143,6 +148,7 @@ fn import_dom(
         instances,
         diagnostics,
         format,
+        terrain,
     }
 }
 
@@ -196,12 +202,25 @@ fn serialize_instance_tree(
     options: &PlaceImportOptions,
     instances: &mut Vec<Value>,
     diagnostics: &mut Vec<ImportDiagnostic>,
+    terrain: &mut Option<RawTerrainExtraction>,
 ) {
     let Some(instance) = dom.get_by_ref(referent) else {
         return;
     };
 
-    let serialized = serialize_instance(instance, root_ref, &path, diagnostics);
+    let terrain_payload_properties = if options.include_terrain && instance.class == "Terrain" {
+        collect_terrain_payloads(instance, &path, diagnostics, terrain)
+    } else {
+        None
+    };
+
+    let serialized = serialize_instance(
+        instance,
+        root_ref,
+        &path,
+        diagnostics,
+        terrain_payload_properties.as_ref(),
+    );
     instances.push(serialized);
 
     let child_refs = instance.children().to_vec();
@@ -229,7 +248,40 @@ fn serialize_instance_tree(
             options,
             instances,
             diagnostics,
+            terrain,
         );
+    }
+}
+
+fn collect_terrain_payloads(
+    instance: &rbx_dom_weak::Instance,
+    path: &str,
+    diagnostics: &mut Vec<ImportDiagnostic>,
+    terrain: &mut Option<RawTerrainExtraction>,
+) -> Option<HashSet<String>> {
+    match collect_raw_terrain_from_instance(instance, path) {
+        Ok(Some(extraction)) => {
+            let payload_properties = extraction
+                .data
+                .voxel_properties
+                .keys()
+                .cloned()
+                .collect::<HashSet<_>>();
+            if terrain.is_none() {
+                *terrain = Some(extraction);
+            }
+            Some(payload_properties)
+        }
+        Ok(None) => None,
+        Err(error) => {
+            diagnostics.push(ImportDiagnostic {
+                kind: ImportDiagnosticKind::UnsupportedTerrainVoxelData,
+                path: path.to_string(),
+                property: None,
+                message: format!("Failed to collect Terrain voxel payloads: {}", error),
+            });
+            None
+        }
     }
 }
 
@@ -238,6 +290,7 @@ fn serialize_instance(
     root_ref: types::Ref,
     path: &str,
     diagnostics: &mut Vec<ImportDiagnostic>,
+    terrain_payload_properties: Option<&HashSet<String>>,
 ) -> Value {
     let mut properties = Map::new();
     let mut attributes = Map::new();
@@ -253,6 +306,11 @@ fn serialize_instance(
         };
         if property_name == "Source" {
             has_script_source = true;
+        }
+        if terrain_payload_properties
+            .is_some_and(|properties| properties.contains(property_name.as_str()))
+        {
+            continue;
         }
 
         match (property_name.as_str(), variant) {
@@ -307,7 +365,10 @@ fn serialize_instance(
         });
     }
 
-    if instance.class == "Terrain" {
+    let terrain_payloads_extracted = terrain_payload_properties
+        .map(|properties| !properties.is_empty())
+        .unwrap_or(false);
+    if instance.class == "Terrain" && !terrain_payloads_extracted {
         diagnostics.push(ImportDiagnostic {
             kind: ImportDiagnosticKind::UnsupportedTerrainVoxelData,
             path: path.to_string(),
@@ -745,6 +806,45 @@ mod tests {
             std::fs::read(temp.path().join(shared_file)).unwrap(),
             vec![5, 6, 7, 8]
         );
+    }
+
+    #[test]
+    fn extracts_terrain_payloads_without_metadata_only_diagnostic() {
+        let mut dom = WeakDom::new(InstanceBuilder::new("DataModel").with_name("game"));
+        let root = dom.root_ref();
+        let workspace = dom.insert(root, InstanceBuilder::new("Workspace"));
+        dom.insert(
+            workspace,
+            InstanceBuilder::new("Terrain")
+                .with_name("Terrain")
+                .with_property("SmoothGrid", BinaryString::from(vec![1, 2, 3, 4]))
+                .with_property("Decoration", true),
+        );
+
+        let result = import_dom(&dom, &test_options(), PlaceFileFormat::Rbxl);
+        assert!(result.terrain.is_some());
+        assert!(
+            !result
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.kind
+                    == ImportDiagnosticKind::UnsupportedTerrainVoxelData)
+        );
+
+        let terrain = result.terrain.as_ref().unwrap();
+        assert_eq!(terrain.data.terrain_path, "Workspace/Terrain");
+        assert_eq!(terrain.data.voxel_properties.len(), 1);
+        assert_eq!(terrain.data.voxel_properties["SmoothGrid"].byte_length, 4);
+        assert_eq!(terrain.blobs.len(), 1);
+        assert_eq!(terrain.blobs[0].bytes, vec![1, 2, 3, 4]);
+
+        let terrain_metadata = result
+            .instances
+            .iter()
+            .find(|inst| inst["path"] == "Workspace/Terrain")
+            .unwrap();
+        assert!(terrain_metadata["properties"].get("SmoothGrid").is_none());
+        assert_eq!(terrain_metadata["properties"]["Decoration"]["value"], true);
     }
 
     #[test]

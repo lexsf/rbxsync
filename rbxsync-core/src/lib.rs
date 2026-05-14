@@ -17,6 +17,7 @@ pub mod place_importer;
 pub mod place_publisher;
 pub mod plugin_builder;
 pub mod rojo;
+pub mod terrain;
 pub mod types;
 
 // Re-export commonly used types
@@ -52,6 +53,17 @@ pub use plugin_builder::{
 };
 pub use rojo::{
     find_rojo_project, parse_rojo_project, rojo_to_tree_mapping, RojoError, RojoProject, RojoTree,
+};
+pub use terrain::{
+    canonical_terrain_manifest, collect_raw_terrain_from_instance,
+    extract_raw_terrain_from_instance, find_studio_sync_terrain_file,
+    legacy_flat_terrain_chunk_file, legacy_terrain_chunk_file, raw_terrain_manifest_relative_path,
+    read_raw_terrain_data, read_terrain_payload, read_terrain_project_data, summarize_raw_terrain,
+    write_raw_terrain_data, write_raw_terrain_extraction, write_terrain_blob, ChunkTerrainData,
+    RawTerrainData, RawTerrainExtraction, TerrainBlobWrite, TerrainDataFormat, TerrainDiagnostic,
+    TerrainDiagnosticKind, TerrainPayloadEncoding, TerrainPayloadRef, TerrainPayloadType,
+    TerrainProjectData, TerrainProjectFile, TerrainProjectFileKind, TerrainSummary,
+    TerrainSummaryMode, TERRAIN_MANIFEST_VERSION,
 };
 pub use types::{
     find_wally_lock,

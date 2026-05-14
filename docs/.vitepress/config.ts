@@ -87,6 +87,7 @@ export default defineConfig({
             { text: 'Overview', link: '/file-formats/' },
             { text: '.luau Scripts', link: '/file-formats/luau' },
             { text: '.rbxjson Format', link: '/file-formats/rbxjson' },
+            { text: 'Terrain Files', link: '/file-formats/terrain' },
             { text: 'Property Types', link: '/file-formats/property-types' },
           ]
         }

@@ -7,6 +7,7 @@ Bidirectional sync between Roblox Studio and filesystem. Full property preservat
 - **One Source of Truth**: Everyone syncs from git. No more "which version is latest?"
 - **Full Property Preservation**: Serializes all instance properties using `.rbxjson` format with explicit type annotations
 - **Offline Asset Payload Handling**: Optionally extracts embedded binary payloads into `assets/` while preserving external asset IDs
+- **Terrain Round-Trip Support**: Preserves raw local place Terrain payloads in `terrain/` for offline import/export parity
 - **True Two-Way Sync**: Edit in Studio or VS Code—changes sync automatically in both directions
 - **AI-Native Architecture**: Built-in MCP server lets AI agents extract, sync, test, and debug
 - **One-Click Extraction**: Extract any existing game to files in seconds
@@ -158,9 +159,11 @@ rbxsync build --plugin MyPlugin.rbxm # Build directly to Studio plugins folder
 rbxsync build -o output.rbxl         # Specify output path
 rbxsync import-place Game.rbxl       # Convert a place file into project files
 rbxsync import-place Game.rbxl --include-assets # Extract embedded asset payloads
+rbxsync import-place Game.rbxl --terrain        # Preserve raw Terrain payloads
 rbxsync import-place Game.rbxl --no-assets      # Keep asset metadata inline
 rbxsync extract-place -o Game.rbxl   # Export project files to a place file
 rbxsync extract-place -o Game.rbxl --include-assets # Embed file-backed asset payloads
+rbxsync extract-place -o Game.rbxl --json       # Reports terrain when terrain/ exists
 rbxsync extract-place -o Game.rbxl --no-assets      # Ignore local asset manifest/files
 rbxsync publish-place Game.rbxl --universe-id 123 --place-id 456 --yes # Upload a place file
 ```
@@ -328,6 +331,36 @@ MyGame/
 
 Use `--no-assets` to ignore an existing asset manifest and local asset files during place conversion.
 
+### Terrain Files
+
+Use `import-place --terrain` when converting a local `.rbxl` or `.rbxlx` to
+preserve raw `Workspace/Terrain` payload properties:
+
+```bash
+rbxsync import-place Game.rbxl --terrain --output MyGame --force --json
+```
+
+This writes:
+
+```
+MyGame/
+├── terrain/
+│   ├── Workspace/
+│   │   └── Terrain.rbxterrain.json
+│   └── blobs/
+│       └── <sha256>.bin
+└── src/
+    └── Workspace/
+        └── Terrain.rbxjson
+```
+
+The `.rbxterrain.json` manifest records exact Terrain payload property names,
+project-relative blob paths, SHA-256 hashes, and byte counts. `extract-place`
+automatically reads the manifest and embeds those blobs back into the generated
+place file when `Workspace` is exported. Studio chunk terrain at
+`src/Workspace/Terrain/terrain.rbxjson` remains a sync format and is reported as
+unsupported for local place-file export until a converter exists.
+
 ### Folder Meta Files (`_meta.rbxjson`)
 
 Use `_meta.rbxjson` to set properties on folder instances:
@@ -347,6 +380,10 @@ MyGame/
 ├── rbxsync.json          # Project configuration
 ├── assets/               # Optional asset manifest and local blobs
 │   ├── manifest.json
+│   └── blobs/
+├── terrain/              # Optional raw Terrain manifests and local blobs
+│   ├── Workspace/
+│   │   └── Terrain.rbxterrain.json
 │   └── blobs/
 ├── src/                  # Instance tree
 │   ├── Workspace/

@@ -113,6 +113,7 @@ MyGame/
 ├── src/                      # Instance tree (required)
 │   ├── Workspace/
 │   │   ├── _meta.rbxjson     # Service properties
+│   │   ├── Terrain.rbxjson   # Terrain metadata
 │   │   ├── Baseplate.rbxjson
 │   │   └── SpawnLocation.rbxjson
 │   ├── ServerScriptService/
@@ -125,8 +126,11 @@ MyGame/
 │   ├── StarterPack/
 │   ├── StarterPlayer/
 │   ├── Lighting.rbxjson      # Service as single file
-│   └── Terrain/
-│       └── terrain.rbxjson   # Terrain data
+├── terrain/
+│   ├── Workspace/
+│   │   └── Terrain.rbxterrain.json
+│   └── blobs/
+│       └── <sha256>.bin
 ├── .rbxsync-backup/          # Auto-backup (for undo)
 └── sourcemap.json            # For Luau LSP
 ```
@@ -296,23 +300,28 @@ The plugin binary is installed to Studio's plugins folder. Game data is never st
 
 ### Terrain
 
-Terrain data is stored in `src/Workspace/Terrain/terrain.rbxjson`:
+Terrain metadata is stored like other instances, usually in
+`src/Workspace/Terrain.rbxjson` or `src/Workspace/Terrain/_meta.rbxjson`:
 
 ```json
 {
   "className": "Terrain",
   "properties": {
-    "WaterColor": { "type": "Color3", "value": { "r": 0.13, "g": 0.56, "b": 0.78 } },
-    "WaterReflectance": { "type": "float", "value": 1 },
-    "WaterTransparency": { "type": "float", "value": 0.3 },
-    "WaterWaveSize": { "type": "float", "value": 0.15 },
-    "WaterWaveSpeed": { "type": "float", "value": 10 }
-  },
-  "terrainData": "base64-encoded-terrain-voxels..."
+    "Decoration": { "type": "bool", "value": true },
+    "WaterTransparency": { "type": "float", "value": 0.3 }
+  }
 }
 ```
 
-Terrain voxel data is base64-encoded to preserve binary fidelity.
+Raw local place Terrain payloads are stored separately under
+`terrain/Workspace/Terrain.rbxterrain.json` with blob bytes in
+`terrain/blobs/<sha256>.bin`. Use `import-place --terrain` to create those files
+from a local place, and `extract-place` will embed them automatically when
+`Workspace` is exported. Legacy Studio chunk data may still exist at
+`src/Workspace/Terrain/terrain.rbxjson`; that format is for plugin/server sync
+and is not yet convertible to local place-file Terrain binary.
+
+See [Terrain Files](/file-formats/terrain) for the manifest shape.
 
 ### CSG Operations
 
