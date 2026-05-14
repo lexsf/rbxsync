@@ -154,9 +154,16 @@ rbxsync extract-place [OPTIONS]
 | `--json` | false | Emit machine-readable JSON |
 | `--strict` | false | Fail if diagnostics are produced |
 | `--services` | All services | Comma-separated services to export |
-| `--no-packages` | false | Skip package folders |
+| `--include-packages` | Auto | Force package folders to be included, even if disabled by `rbxsync.json` |
+| `--no-packages` | Auto | Skip package folders even when present or enabled by `rbxsync.json` |
 | `--include-assets` | false | Read `assets/manifest.json` and embed file-backed payloads |
 | `--no-assets` | false | Ignore `assets/manifest.json` and only use inline metadata |
+
+By default, `extract-place` includes `Packages` and `ServerPackages` folders
+that are present in the exported tree. If `rbxsync.json` explicitly sets
+`"packages": { "enabled": false }`, the default switches to skipping package
+folders. Use `--include-packages` to force a one-off export with packages, or
+`--no-packages` to force a one-off export without packages.
 
 Examples:
 
@@ -164,6 +171,7 @@ Examples:
 rbxsync extract-place --path ./GameProject --output ./build/Game.rbxl --force
 rbxsync extract-place --path ./GameProject --output ./build/Game.rbxlx --force
 rbxsync extract-place --path ./GameProject --dry-run --json
+rbxsync extract-place --path ./GameProject --no-packages --output ./build/Game.rbxl --force
 rbxsync extract-place --path ./GameProject --include-assets --output ./build/Game.rbxl --force
 ```
 

@@ -16,9 +16,9 @@ use rbxsync_core::{
     find_existing_rbxsync_plugin, find_rojo_project, get_studio_plugins_folder, import_place_file,
     install_plugin, parse_rojo_project, rojo_to_tree_mapping, summarize_assets,
     summarize_raw_terrain, write_raw_terrain_extraction, write_serialized_instances, AssetMode,
-    AssetSummary, ExtractWriterOptions, PlaceExportFormat, PlaceExportOptions, PlaceImportOptions,
-    PluginBuildConfig, ProjectConfig, PublishPlaceOptions, PublishPlaceSummary, PublishVersionType,
-    TerrainProjectFileKind, TerrainSummary,
+    AssetSummary, ExtractWriterOptions, PackageExportMode, PackageExportSummary, PlaceExportFormat,
+    PlaceExportOptions, PlaceImportOptions, PluginBuildConfig, ProjectConfig, PublishPlaceOptions,
+    PublishPlaceSummary, PublishVersionType, TerrainProjectFileKind, TerrainSummary,
 };
 use rbxsync_server::{run_server, ServerConfig};
 
@@ -227,11 +227,11 @@ enum Commands {
         #[arg(long, value_delimiter = ',')]
         services: Option<Vec<String>>,
 
-        /// Include package folders in the exported place
+        /// Force package folders to be included, even if disabled by rbxsync.json
         #[arg(long, conflicts_with = "no_packages")]
         include_packages: bool,
 
-        /// Skip package folders in the exported place
+        /// Skip package folders even when present or enabled by rbxsync.json
         #[arg(long)]
         no_packages: bool,
 
@@ -763,7 +763,7 @@ async fn main() -> Result<()> {
             include_assets,
             no_assets,
         } => {
-            let include_packages = include_packages || !no_packages;
+            let package_mode = resolve_package_export_mode(include_packages, no_packages);
             let asset_mode = resolve_asset_mode(include_assets, no_assets);
             cmd_extract_place(
                 path,
@@ -775,7 +775,7 @@ async fn main() -> Result<()> {
                 quiet,
                 strict,
                 services,
-                include_packages,
+                package_mode,
                 asset_mode,
             )
             .await?;
@@ -1559,6 +1559,16 @@ fn resolve_asset_mode(include_assets: bool, no_assets: bool) -> AssetMode {
     }
 }
 
+fn resolve_package_export_mode(include_packages: bool, no_packages: bool) -> PackageExportMode {
+    if no_packages {
+        PackageExportMode::Skip
+    } else if include_packages {
+        PackageExportMode::Include
+    } else {
+        PackageExportMode::Auto
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn cmd_extract_place(
     path: Option<PathBuf>,
@@ -1570,7 +1580,7 @@ async fn cmd_extract_place(
     quiet: bool,
     strict: bool,
     services: Option<Vec<String>>,
-    include_packages: bool,
+    package_mode: PackageExportMode,
     asset_mode: AssetMode,
 ) -> Result<()> {
     let project_dir_input = path.unwrap_or(std::env::current_dir()?);
@@ -1623,7 +1633,7 @@ async fn cmd_extract_place(
         dry_run,
         strict,
         services: selected_services,
-        include_packages,
+        package_mode,
         tree_mapping,
         asset_mode,
     })?;
@@ -1965,6 +1975,7 @@ fn print_export_summary(
                 "diagnostics": summary.diagnostics,
                 "diagnosticCount": summary.diagnostics.len(),
                 "diagnosticSummary": diagnostic_summary,
+                "packages": summary.package_summary,
                 "assets": summary.asset_summary,
                 "terrain": summary.terrain_summary,
             }))?
@@ -1990,6 +2001,8 @@ fn print_export_summary(
     if !summary.services.is_empty() {
         println!("Services: {}", summary.services.join(", "));
     }
+
+    print_package_summary(&summary.package_summary);
 
     if let Some(asset_summary) = summary.asset_summary.as_ref() {
         print_asset_summary(asset_summary);
@@ -2026,6 +2039,18 @@ fn print_export_summary(
     }
 
     Ok(())
+}
+
+fn print_package_summary(summary: &PackageExportSummary) {
+    let effective = if summary.effective_include {
+        "include"
+    } else {
+        "skip"
+    };
+    println!(
+        "Packages: mode={:?}, effective={}, included roots={}, skipped roots={}",
+        summary.mode, effective, summary.included_roots, summary.skipped_roots
+    );
 }
 
 fn print_asset_summary(summary: &AssetSummary) {
@@ -3260,7 +3285,7 @@ fn do_build(
         dry_run: false,
         strict: false,
         services: None,
-        include_packages: true,
+        package_mode: PackageExportMode::Include,
         tree_mapping: Default::default(),
         asset_mode: AssetMode::ReferencesOnly,
     })?;

@@ -73,6 +73,28 @@ impl std::fmt::Display for PlaceExportFormat {
     }
 }
 
+/// Package inclusion policy for project exports.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PackageExportMode {
+    /// Include packages unless project configuration explicitly disables packages.
+    Auto,
+    /// Include packages even if project configuration disables packages.
+    Include,
+    /// Skip package folders even if they are present in the exported tree.
+    Skip,
+}
+
+/// Summary of package handling during an export.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PackageExportSummary {
+    pub mode: PackageExportMode,
+    pub effective_include: bool,
+    pub included_roots: usize,
+    pub skipped_roots: usize,
+}
+
 /// Options for exporting project files to a Roblox artifact.
 #[derive(Debug, Clone)]
 pub struct PlaceExportOptions {
@@ -84,7 +106,7 @@ pub struct PlaceExportOptions {
     pub dry_run: bool,
     pub strict: bool,
     pub services: Option<HashSet<String>>,
-    pub include_packages: bool,
+    pub package_mode: PackageExportMode,
     pub tree_mapping: HashMap<String, String>,
     pub asset_mode: AssetMode,
 }
@@ -138,6 +160,7 @@ pub struct PlaceExportSummary {
     pub services: Vec<String>,
     pub bytes_written: Option<u64>,
     pub diagnostics: Vec<PlaceExportDiagnostic>,
+    pub package_summary: PackageExportSummary,
     pub asset_summary: Option<AssetSummary>,
     pub terrain_summary: Option<TerrainSummary>,
 }
@@ -154,11 +177,13 @@ struct PendingRef {
 struct BuildResult {
     dom: WeakDom,
     diagnostics: Vec<PlaceExportDiagnostic>,
+    package_summary: PackageExportSummary,
 }
 
 struct DomBuilder {
     dom: WeakDom,
     options: PlaceExportOptions,
+    package_summary: PackageExportSummary,
     path_refs: HashMap<String, Ref>,
     reference_refs: HashMap<String, Ref>,
     pending_refs: Vec<PendingRef>,
@@ -167,7 +192,7 @@ struct DomBuilder {
 
 /// Export project files to a Roblox place/model artifact.
 pub fn export_place(options: PlaceExportOptions) -> Result<PlaceExportSummary> {
-    let (options, mut diagnostics) = apply_project_config(options);
+    let (options, mut diagnostics, package_config_enabled) = apply_project_config(options);
 
     if !options.source_dir.exists() {
         diagnostics.push(PlaceExportDiagnostic {
@@ -206,7 +231,8 @@ pub fn export_place(options: PlaceExportOptions) -> Result<PlaceExportSummary> {
     let BuildResult {
         mut dom,
         diagnostics: build_diagnostics,
-    } = build_project_dom(options.clone())?;
+        package_summary,
+    } = build_project_dom(options.clone(), package_config_enabled)?;
     diagnostics.extend(build_diagnostics);
     let terrain_summary = apply_project_terrain(&mut dom, &options, &mut diagnostics)?;
 
@@ -231,7 +257,14 @@ pub fn export_place(options: PlaceExportOptions) -> Result<PlaceExportSummary> {
         );
     }
 
-    let mut summary = summarize_dom(&dom, &options, diagnostics, asset_summary, terrain_summary);
+    let mut summary = summarize_dom(
+        &dom,
+        &options,
+        diagnostics,
+        package_summary,
+        asset_summary,
+        terrain_summary,
+    );
 
     if !options.dry_run {
         write_dom(&dom, &options)?;
@@ -245,12 +278,14 @@ pub fn export_place(options: PlaceExportOptions) -> Result<PlaceExportSummary> {
 
 /// Build a Roblox DOM from an RbxSync source tree.
 pub fn build_dom_from_project(options: &PlaceExportOptions) -> Result<WeakDom> {
+    let (options, mut diagnostics, package_config_enabled) = apply_project_config(options.clone());
     let BuildResult {
         mut dom,
         diagnostics: build_diagnostics,
-    } = build_project_dom(options.clone())?;
-    let mut diagnostics = build_diagnostics;
-    apply_project_terrain(&mut dom, options, &mut diagnostics)?;
+        package_summary: _,
+    } = build_project_dom(options.clone(), package_config_enabled)?;
+    diagnostics.extend(build_diagnostics);
+    apply_project_terrain(&mut dom, &options, &mut diagnostics)?;
 
     if let Some(diagnostic) = first_fatal_terrain_diagnostic(&diagnostics) {
         bail!(
@@ -271,8 +306,9 @@ pub fn build_dom_from_project(options: &PlaceExportOptions) -> Result<WeakDom> {
 
 fn apply_project_config(
     mut options: PlaceExportOptions,
-) -> (PlaceExportOptions, Vec<PlaceExportDiagnostic>) {
+) -> (PlaceExportOptions, Vec<PlaceExportDiagnostic>, Option<bool>) {
     let mut diagnostics = Vec::new();
+    let mut package_config_enabled = None;
     let config_path = options.project_dir.join("rbxsync.json");
 
     if config_path.exists() {
@@ -287,6 +323,7 @@ fn apply_project_config(
                 if !options.source_dir.exists() {
                     options.source_dir = options.project_dir.join(config.tree);
                 }
+                package_config_enabled = config.packages.as_ref().map(|packages| packages.enabled);
             }
             None => diagnostics.push(PlaceExportDiagnostic {
                 kind: PlaceExportDiagnosticKind::InvalidProjectConfig,
@@ -297,7 +334,7 @@ fn apply_project_config(
         }
     }
 
-    (options, diagnostics)
+    (options, diagnostics, package_config_enabled)
 }
 
 fn validate_tree_mapping(options: &PlaceExportOptions) -> Vec<PlaceExportDiagnostic> {
@@ -321,7 +358,10 @@ fn validate_tree_mapping(options: &PlaceExportOptions) -> Vec<PlaceExportDiagnos
     diagnostics
 }
 
-fn build_project_dom(options: PlaceExportOptions) -> Result<BuildResult> {
+fn build_project_dom(
+    options: PlaceExportOptions,
+    package_config_enabled: Option<bool>,
+) -> Result<BuildResult> {
     let root_class = if options.format.is_place() {
         "DataModel"
     } else {
@@ -334,9 +374,16 @@ fn build_project_dom(options: PlaceExportOptions) -> Result<BuildResult> {
     };
 
     let dom = WeakDom::new(InstanceBuilder::new(root_class).with_name(root_name));
+    let package_summary = PackageExportSummary {
+        mode: options.package_mode,
+        effective_include: effective_package_include(options.package_mode, package_config_enabled),
+        included_roots: 0,
+        skipped_roots: 0,
+    };
     let mut builder = DomBuilder {
         dom,
         options,
+        package_summary,
         path_refs: HashMap::new(),
         reference_refs: HashMap::new(),
         pending_refs: Vec::new(),
@@ -359,7 +406,29 @@ fn build_project_dom(options: PlaceExportOptions) -> Result<BuildResult> {
     Ok(BuildResult {
         dom: builder.dom,
         diagnostics: builder.diagnostics,
+        package_summary: builder.package_summary,
     })
+}
+
+fn effective_package_include(
+    mode: PackageExportMode,
+    package_config_enabled: Option<bool>,
+) -> bool {
+    match mode {
+        PackageExportMode::Auto => package_config_enabled.unwrap_or(true),
+        PackageExportMode::Include => true,
+        PackageExportMode::Skip => false,
+    }
+}
+
+fn is_package_root_path(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .map(|name| {
+            let name = name.to_ascii_lowercase();
+            name == "packages" || name == "serverpackages"
+        })
+        .unwrap_or(false)
 }
 
 fn discover_roots(options: &PlaceExportOptions) -> Result<Vec<(PathBuf, String)>> {
@@ -436,6 +505,7 @@ fn summarize_dom(
     dom: &WeakDom,
     options: &PlaceExportOptions,
     diagnostics: Vec<PlaceExportDiagnostic>,
+    package_summary: PackageExportSummary,
     asset_summary: Option<AssetSummary>,
     terrain_summary: Option<TerrainSummary>,
 ) -> PlaceExportSummary {
@@ -459,6 +529,7 @@ fn summarize_dom(
         services,
         bytes_written: None,
         diagnostics,
+        package_summary,
         asset_summary,
         terrain_summary,
     }
@@ -885,7 +956,13 @@ impl DomBuilder {
         dm_path: &str,
         fallback_name: &str,
     ) -> Result<Ref> {
-        if !self.options.include_packages && is_package_path(dir_path) {
+        let is_package_path = is_package_path(dir_path);
+        let is_package_root = is_package_root_path(dir_path);
+
+        if !self.package_summary.effective_include && is_package_path {
+            if is_package_root {
+                self.package_summary.skipped_roots += 1;
+            }
             self.diagnostics.push(PlaceExportDiagnostic {
                 kind: PlaceExportDiagnosticKind::SkippedPackage,
                 path: dm_path.to_string(),
@@ -893,6 +970,10 @@ impl DomBuilder {
                 message: format!("Skipped package directory {}", dir_path.display()),
             });
             return Ok(parent);
+        }
+
+        if self.package_summary.effective_include && is_package_root {
+            self.package_summary.included_roots += 1;
         }
 
         if let Some(existing) = self.path_refs.get(dm_path).copied() {
@@ -1842,7 +1923,7 @@ mod tests {
             dry_run: true,
             strict: false,
             services: None,
-            include_packages: true,
+            package_mode: PackageExportMode::Include,
             tree_mapping: HashMap::new(),
             asset_mode: AssetMode::ReferencesOnly,
         }
@@ -1858,6 +1939,12 @@ mod tests {
                     .is_some_and(|child| child.name == name)
             })
             .expect("child exists")
+    }
+
+    fn write_package_fixture(project: &Path) {
+        let package_dir = project.join("src/ReplicatedStorage/Packages/MyPackage");
+        std::fs::create_dir_all(&package_dir).expect("package dir");
+        std::fs::write(package_dir.join("init.luau"), "return {}").expect("package script");
     }
 
     #[test]
@@ -1902,7 +1989,7 @@ mod tests {
             .tree_mapping
             .insert("ServerScriptService".to_string(), "server".to_string());
 
-        let result = build_project_dom(options).expect("build dom");
+        let result = build_project_dom(options, None).expect("build dom");
         assert_eq!(result.diagnostics.len(), 1);
         assert_eq!(
             result.diagnostics[0].kind,
@@ -1990,6 +2077,81 @@ mod tests {
     }
 
     #[test]
+    fn package_auto_includes_and_reports_package_root() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let project = temp.path();
+        write_package_fixture(project);
+
+        let mut options = options(project);
+        options.package_mode = PackageExportMode::Auto;
+        let summary = export_place(options).expect("export summary");
+
+        assert_eq!(summary.package_summary.mode, PackageExportMode::Auto);
+        assert!(summary.package_summary.effective_include);
+        assert_eq!(summary.package_summary.included_roots, 1);
+        assert_eq!(summary.package_summary.skipped_roots, 0);
+        assert!(summary.diagnostics.is_empty());
+    }
+
+    #[test]
+    fn package_auto_respects_disabled_project_config() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let project = temp.path();
+        write_package_fixture(project);
+        std::fs::write(
+            project.join("rbxsync.json"),
+            serde_json::to_string_pretty(&json!({
+                "name": "PackageConfigFixture",
+                "tree": "src",
+                "packages": { "enabled": false }
+            }))
+            .unwrap(),
+        )
+        .expect("project config");
+
+        let mut options = options(project);
+        options.package_mode = PackageExportMode::Auto;
+        let summary = export_place(options).expect("export summary");
+
+        assert_eq!(summary.package_summary.mode, PackageExportMode::Auto);
+        assert!(!summary.package_summary.effective_include);
+        assert_eq!(summary.package_summary.included_roots, 0);
+        assert_eq!(summary.package_summary.skipped_roots, 1);
+        assert_eq!(summary.diagnostics.len(), 1);
+        assert_eq!(
+            summary.diagnostics[0].kind,
+            PlaceExportDiagnosticKind::SkippedPackage
+        );
+    }
+
+    #[test]
+    fn package_include_overrides_disabled_project_config() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let project = temp.path();
+        write_package_fixture(project);
+        std::fs::write(
+            project.join("rbxsync.json"),
+            serde_json::to_string_pretty(&json!({
+                "name": "PackageConfigFixture",
+                "tree": "src",
+                "packages": { "enabled": false }
+            }))
+            .unwrap(),
+        )
+        .expect("project config");
+
+        let mut options = options(project);
+        options.package_mode = PackageExportMode::Include;
+        let summary = export_place(options).expect("export summary");
+
+        assert_eq!(summary.package_summary.mode, PackageExportMode::Include);
+        assert!(summary.package_summary.effective_include);
+        assert_eq!(summary.package_summary.included_roots, 1);
+        assert_eq!(summary.package_summary.skipped_roots, 0);
+        assert!(summary.diagnostics.is_empty());
+    }
+
+    #[test]
     fn embeds_file_backed_binary_and_shared_string_values() {
         let temp = tempfile::tempdir().expect("tempdir");
         let project = temp.path();
@@ -2034,7 +2196,7 @@ mod tests {
         )
         .expect("metadata");
 
-        let result = build_project_dom(options(project)).expect("build dom");
+        let result = build_project_dom(options(project), None).expect("build dom");
         assert!(result.diagnostics.is_empty());
 
         let root = result.dom.root_ref();

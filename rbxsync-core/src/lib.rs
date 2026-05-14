@@ -34,8 +34,9 @@ pub use path_utils::{
     normalize_path, path_to_string, path_with_suffix, pathbuf_with_suffix, sanitize_filename,
 };
 pub use place_exporter::{
-    build_dom_from_project, export_place, PlaceExportDiagnostic, PlaceExportDiagnosticKind,
-    PlaceExportFormat, PlaceExportOptions, PlaceExportSummary,
+    build_dom_from_project, export_place, PackageExportMode, PackageExportSummary,
+    PlaceExportDiagnostic, PlaceExportDiagnosticKind, PlaceExportFormat, PlaceExportOptions,
+    PlaceExportSummary,
 };
 pub use place_importer::{
     import_place_file, ImportDiagnostic, ImportDiagnosticKind, PlaceFileFormat, PlaceImportOptions,

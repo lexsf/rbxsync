@@ -95,7 +95,7 @@ Control how games are extracted:
 
 ## Wally Package Support
 
-RbxSync supports [Wally](https://wally.run/) packages. When enabled, packages are preserved during extraction and excluded from file watching to prevent accidental overwrites.
+RbxSync supports [Wally](https://wally.run/) packages. When enabled, packages are included by default when exporting a project with `extract-place`, preserved during import or Studio extraction, and excluded from file watching to prevent accidental overwrites.
 
 ```json
 {
@@ -112,20 +112,22 @@ RbxSync supports [Wally](https://wally.run/) packages. When enabled, packages ar
 
 | Field | Default | Description |
 |-------|---------|-------------|
-| `enabled` | `true` | Enable Wally package support |
+| `enabled` | `true` | Enable Wally package support; set to `false` to make `extract-place` skip packages by default |
 | `sharedPackagesPath` | `ReplicatedStorage/Packages` | DataModel path for shared packages |
 | `serverPackagesPath` | `ServerScriptService/Packages` | DataModel path for server packages |
 | `excludeFromWatch` | `true` | Don't sync package file changes to Studio |
-| `preserveOnExtract` | `true` | Keep local packages instead of overwriting from Studio |
+| `preserveOnExtract` | `true` | Keep local packages instead of overwriting from import or Studio extraction |
 | `packagesFolder` | `Packages` | Filesystem folder name for packages |
 
 ### How It Works
 
-1. **File Watching**: Files in `Packages/` directories are ignored during live sync. This prevents your Wally packages from being accidentally synced back to Studio.
+1. **Exporting**: `extract-place` includes package folders by default when they are present in the exported tree. If `packages.enabled` is explicitly `false`, package folders are skipped by default. Use `--include-packages` to force package inclusion for one export, or `--no-packages` to force package skipping.
 
-2. **Extraction**: When you extract a game, local Packages folders are preserved from your backup instead of being overwritten by Studio's version. This ensures your `wally.toml` dependencies stay intact.
+2. **File Watching**: Files in `Packages/` directories are ignored during live sync. This prevents your Wally packages from being accidentally synced back to Studio.
 
-3. **Wally Workflow**: Use Wally as normal to install packages:
+3. **Import and Studio Extraction**: When you import or extract a game into a local project, `preserveOnExtract` keeps local Packages folders from your backup instead of overwriting them with Studio's version. This setting does not control `extract-place`; use `packages.enabled` or the package flags for export behavior.
+
+4. **Wally Workflow**: Use Wally as normal to install packages:
    ```bash
    wally install
    ```

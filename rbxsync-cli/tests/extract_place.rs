@@ -92,6 +92,36 @@ fn write_terrain_fixture_project(project_dir: &Path) {
     .expect("terrain manifest");
 }
 
+fn write_package_project(project_dir: &Path) {
+    let package_dir = project_dir.join("src/ReplicatedStorage/Packages/MyPackage");
+    std::fs::create_dir_all(&package_dir).expect("package dir");
+    std::fs::write(
+        package_dir.join("init.luau"),
+        "return { name = 'MyPackage' }\n",
+    )
+    .expect("package module");
+}
+
+fn import_place(place_file: &Path, imported_project: &Path) -> serde_json::Value {
+    let output = command()
+        .args([
+            "import-place",
+            place_file.to_str().unwrap(),
+            "--output",
+            imported_project.to_str().unwrap(),
+            "--force",
+            "--json",
+        ])
+        .output()
+        .expect("run import-place");
+    assert!(
+        output.status.success(),
+        "import-place failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    serde_json::from_slice(&output.stdout).expect("clean import json stdout")
+}
+
 fn extract_place(
     source_project: &Path,
     output_path: &Path,
@@ -118,6 +148,121 @@ fn extract_place(
         String::from_utf8_lossy(&output.stderr)
     );
     serde_json::from_slice(&output.stdout).expect("clean json stdout")
+}
+
+#[test]
+fn extract_place_includes_packages_by_default_and_reimports_them() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let source_project = temp.path().join("source");
+    let place_file = temp.path().join("packages.rbxl");
+    let imported_project = temp.path().join("imported");
+    write_package_project(&source_project);
+
+    let summary = extract_place(&source_project, &place_file, Some("rbxl"));
+    assert_eq!(summary["success"], true);
+    assert_eq!(summary["diagnosticCount"], 0);
+    assert_eq!(summary["packages"]["mode"], "auto");
+    assert_eq!(summary["packages"]["effectiveInclude"], true);
+    assert_eq!(summary["packages"]["includedRoots"], 1);
+    assert_eq!(summary["packages"]["skippedRoots"], 0);
+
+    let import_summary = import_place(&place_file, &imported_project);
+    assert_eq!(import_summary["success"], true);
+    assert!(
+        imported_project
+            .join("src/ReplicatedStorage/Packages/MyPackage.luau")
+            .exists(),
+        "package module should round-trip by default"
+    );
+}
+
+#[test]
+fn extract_place_no_packages_skips_packages_and_reports_summary() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let source_project = temp.path().join("source");
+    let place_file = temp.path().join("without-packages.rbxl");
+    let imported_project = temp.path().join("imported");
+    write_package_project(&source_project);
+
+    let output = command()
+        .args([
+            "extract-place",
+            "--path",
+            source_project.to_str().unwrap(),
+            "--output",
+            place_file.to_str().unwrap(),
+            "--force",
+            "--no-packages",
+            "--json",
+        ])
+        .output()
+        .expect("run extract-place");
+    assert!(
+        output.status.success(),
+        "extract-place failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let summary: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("clean json stdout");
+    assert_eq!(summary["success"], true);
+    assert_eq!(summary["packages"]["mode"], "skip");
+    assert_eq!(summary["packages"]["effectiveInclude"], false);
+    assert_eq!(summary["packages"]["includedRoots"], 0);
+    assert_eq!(summary["packages"]["skippedRoots"], 1);
+    assert_eq!(
+        summary["diagnosticSummary"]["skippedPackage"],
+        serde_json::json!(1)
+    );
+
+    let import_summary = import_place(&place_file, &imported_project);
+    assert_eq!(import_summary["success"], true);
+    assert!(
+        !imported_project
+            .join("src/ReplicatedStorage/Packages/MyPackage.luau")
+            .exists(),
+        "package module should be absent after --no-packages export"
+    );
+}
+
+#[test]
+fn extract_place_includes_tree_mapped_top_level_packages_by_default() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let source_project = temp.path().join("source");
+    let place_file = temp.path().join("mapped-packages.rbxl");
+    let imported_project = temp.path().join("imported");
+    let package_dir = source_project.join("Packages/MyPackage");
+    std::fs::create_dir_all(source_project.join("src")).expect("src dir");
+    std::fs::create_dir_all(&package_dir).expect("package dir");
+    std::fs::write(package_dir.join("init.luau"), "return { mapped = true }\n")
+        .expect("package module");
+    std::fs::write(
+        source_project.join("rbxsync.json"),
+        r#"{
+  "name": "MappedPackages",
+  "tree": "src",
+  "treeMapping": {
+    "ReplicatedStorage/Packages": "Packages"
+  }
+}"#,
+    )
+    .expect("project config");
+
+    let summary = extract_place(&source_project, &place_file, Some("rbxl"));
+    assert_eq!(summary["success"], true);
+    assert_eq!(summary["diagnosticCount"], 0);
+    assert_eq!(summary["packages"]["mode"], "auto");
+    assert_eq!(summary["packages"]["effectiveInclude"], true);
+    assert_eq!(summary["packages"]["includedRoots"], 1);
+    assert_eq!(summary["packages"]["skippedRoots"], 0);
+
+    let import_summary = import_place(&place_file, &imported_project);
+    assert_eq!(import_summary["success"], true);
+    assert!(
+        imported_project
+            .join("src/ReplicatedStorage/Packages/MyPackage.luau")
+            .exists(),
+        "tree-mapped package module should import under ReplicatedStorage/Packages"
+    );
 }
 
 #[test]
