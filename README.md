@@ -6,6 +6,7 @@ Bidirectional sync between Roblox Studio and filesystem. Full property preservat
 
 - **One Source of Truth**: Everyone syncs from git. No more "which version is latest?"
 - **Full Property Preservation**: Serializes all instance properties using `.rbxjson` format with explicit type annotations
+- **Offline Asset Payload Handling**: Optionally extracts embedded binary payloads into `assets/` while preserving external asset IDs
 - **True Two-Way Sync**: Edit in Studio or VS Code—changes sync automatically in both directions
 - **AI-Native Architecture**: Built-in MCP server lets AI agents extract, sync, test, and debug
 - **One-Click Extraction**: Extract any existing game to files in seconds
@@ -156,7 +157,11 @@ rbxsync build --watch                # Watch for changes and auto-rebuild
 rbxsync build --plugin MyPlugin.rbxm # Build directly to Studio plugins folder
 rbxsync build -o output.rbxl         # Specify output path
 rbxsync import-place Game.rbxl       # Convert a place file into project files
+rbxsync import-place Game.rbxl --include-assets # Extract embedded asset payloads
+rbxsync import-place Game.rbxl --no-assets      # Keep asset metadata inline
 rbxsync extract-place -o Game.rbxl   # Export project files to a place file
+rbxsync extract-place -o Game.rbxl --include-assets # Embed file-backed asset payloads
+rbxsync extract-place -o Game.rbxl --no-assets      # Ignore local asset manifest/files
 rbxsync publish-place Game.rbxl --universe-id 123 --place-id 456 --yes # Upload a place file
 ```
 
@@ -294,7 +299,34 @@ Non-script instances are stored as `.rbxjson` files with full property preservat
 | `NumberRange` | `{ "min": 0, "max": 100 }` |
 | `Enum` | `{ "enumType": "Material", "value": "Plastic" }` |
 | `Content` | `"rbxassetid://123456"` |
+| `BinaryString` | base64 string or `{ "file": "assets/blobs/<hash>.bin", "sha256": "..." }` |
+| `SharedString` | `{ "hash": "...", "data": "..." }` or file-backed value |
 | `Font` | `{ "family": "...", "weight": 400, "style": "Normal" }` |
+
+### Asset Files
+
+By default, local place conversion preserves asset-like property values directly in `.rbxjson` metadata and does not create an `assets/` directory. Use `--include-assets` when converting place files to extract embedded payloads into project-local files:
+
+```bash
+rbxsync import-place Game.rbxl --include-assets --output MyGame
+```
+
+This writes:
+
+```
+MyGame/
+├── assets/
+│   ├── manifest.json
+│   └── blobs/
+│       └── <sha256>.bin
+└── src/
+```
+
+`BinaryString` and `SharedString` payloads embedded in the place file are written to `assets/blobs/<sha256>.bin`, and the corresponding `.rbxjson` property is rewritten with a project-relative `file` path, `sha256`, and `byteLength`. Running `extract-place --include-assets` reads those file-backed payloads and embeds the bytes back into the generated `.rbxl` or `.rbxlx`.
+
+`Content` values such as `rbxassetid://123456` are recorded in `assets/manifest.json` and preserved as references. RbxSync does not download external Roblox assets in this flow.
+
+Use `--no-assets` to ignore an existing asset manifest and local asset files during place conversion.
 
 ### Folder Meta Files (`_meta.rbxjson`)
 
@@ -313,6 +345,9 @@ src/
 ```
 MyGame/
 ├── rbxsync.json          # Project configuration
+├── assets/               # Optional asset manifest and local blobs
+│   ├── manifest.json
+│   └── blobs/
 ├── src/                  # Instance tree
 │   ├── Workspace/
 │   ├── ReplicatedStorage/

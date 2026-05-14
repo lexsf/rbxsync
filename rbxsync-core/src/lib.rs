@@ -8,6 +8,7 @@
 //! - Rojo project file parsing and migration
 //! - Luau obfuscation for build-time transforms
 
+pub mod assets;
 pub mod extract_writer;
 pub mod obfuscator;
 pub mod path_utils;
@@ -19,6 +20,13 @@ pub mod rojo;
 pub mod types;
 
 // Re-export commonly used types
+pub use assets::{
+    asset_sha256_hex, build_asset_manifest, discover_assets, extract_embedded_assets,
+    load_asset_manifest, read_asset_file, resolve_asset_file, summarize_assets,
+    write_asset_manifest, AssetEntry, AssetExtractionResult, AssetFileError, AssetFileErrorKind,
+    AssetKind, AssetManifest, AssetMode, AssetSource, AssetStatus, AssetSummary,
+    ASSET_MANIFEST_VERSION,
+};
 pub use extract_writer::{write_serialized_instances, ExtractWriterOptions, ExtractWriterSummary};
 pub use obfuscator::{ObfuscationResult, Obfuscator, ObfuscatorConfig};
 pub use path_utils::{

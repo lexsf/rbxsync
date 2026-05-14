@@ -695,6 +695,59 @@ mod tests {
     }
 
     #[test]
+    fn imported_asset_payloads_can_be_extracted_to_manifest_and_blobs() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut dom = WeakDom::new(InstanceBuilder::new("DataModel").with_name("game"));
+        let root = dom.root_ref();
+        let workspace = dom.insert(root, InstanceBuilder::new("Workspace"));
+        dom.insert(
+            workspace,
+            InstanceBuilder::new("Sound")
+                .with_name("AssetHolder")
+                .with_property("SoundId", types::Content::from("rbxassetid://123456"))
+                .with_property("BinaryData", BinaryString::from(vec![1, 2, 3, 4]))
+                .with_property("SharedData", SharedString::new(vec![5, 6, 7, 8])),
+        );
+
+        let result = import_dom(&dom, &test_options(), PlaceFileFormat::Rbxl);
+        let extraction =
+            crate::extract_embedded_assets(result.instances, temp.path(), "rbxsync import-place")
+                .unwrap();
+
+        assert!(temp.path().join("assets/manifest.json").exists());
+        assert_eq!(extraction.summary.content_references, 1);
+        assert_eq!(extraction.summary.embedded_payloads, 2);
+        assert_eq!(extraction.summary.files_written, 2);
+
+        let asset_holder = extraction
+            .instances
+            .iter()
+            .find(|inst| inst["path"] == "Workspace/AssetHolder")
+            .unwrap();
+        assert_eq!(
+            asset_holder["properties"]["SoundId"]["value"],
+            "rbxassetid://123456"
+        );
+
+        let binary_file = asset_holder["properties"]["BinaryData"]["value"]["file"]
+            .as_str()
+            .unwrap();
+        let shared_file = asset_holder["properties"]["SharedData"]["value"]["file"]
+            .as_str()
+            .unwrap();
+        assert!(binary_file.starts_with("assets/blobs/"));
+        assert!(shared_file.starts_with("assets/blobs/"));
+        assert_eq!(
+            std::fs::read(temp.path().join(binary_file)).unwrap(),
+            vec![1, 2, 3, 4]
+        );
+        assert_eq!(
+            std::fs::read(temp.path().join(shared_file)).unwrap(),
+            vec![5, 6, 7, 8]
+        );
+    }
+
+    #[test]
     fn reports_missing_services_script_source_and_terrain_limitations() {
         let mut dom = WeakDom::new(InstanceBuilder::new("DataModel").with_name("game"));
         let root = dom.root_ref();

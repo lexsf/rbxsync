@@ -215,3 +215,151 @@ fn extract_place_rejects_format_output_mismatch() {
         stderr
     );
 }
+
+#[test]
+fn extract_place_include_assets_reads_manifest_and_file_backed_payloads() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let source_project = temp.path().join("source");
+    let workspace = source_project.join("src/Workspace");
+    let blobs = source_project.join("assets/blobs");
+    std::fs::create_dir_all(&workspace).expect("workspace dir");
+    std::fs::create_dir_all(&blobs).expect("blobs dir");
+    std::fs::write(blobs.join("blob.bin"), [1, 2, 3, 4]).expect("blob file");
+    std::fs::write(blobs.join("shared.bin"), [5, 6, 7, 8]).expect("shared file");
+    std::fs::write(
+        source_project.join("assets/manifest.json"),
+        r#"{
+  "version": 1,
+  "generatedBy": "test",
+  "entries": [
+    {
+      "id": "file:Workspace/AssetHolder:BinaryData:assets/blobs/blob.bin",
+      "kind": "binaryString",
+      "source": "localFile",
+      "instancePath": "Workspace/AssetHolder",
+      "property": "BinaryData",
+      "original": null,
+      "file": "assets/blobs/blob.bin",
+      "sha256": null,
+      "byteLength": 4,
+      "status": "fileBacked"
+    },
+    {
+      "id": "file:Workspace/AssetHolder:SharedData:assets/blobs/shared.bin",
+      "kind": "sharedString",
+      "source": "localFile",
+      "instancePath": "Workspace/AssetHolder",
+      "property": "SharedData",
+      "original": "fixture-shared",
+      "file": "assets/blobs/shared.bin",
+      "sha256": null,
+      "byteLength": 4,
+      "status": "fileBacked"
+    }
+  ]
+}"#,
+    )
+    .expect("manifest");
+    std::fs::write(
+        workspace.join("AssetHolder.rbxjson"),
+        r#"{
+  "className": "Folder",
+  "name": "AssetHolder",
+  "properties": {
+    "BinaryData": {
+      "type": "BinaryString",
+      "value": {
+        "file": "assets/blobs/blob.bin",
+        "encoding": "raw",
+        "byteLength": 4
+      }
+    },
+    "SharedData": {
+      "type": "SharedString",
+      "value": {
+        "hash": "fixture-shared",
+        "file": "assets/blobs/shared.bin",
+        "byteLength": 4
+      }
+    }
+  }
+}"#,
+    )
+    .expect("metadata");
+
+    let place_file = temp.path().join("with-assets.rbxl");
+    let output = command()
+        .args([
+            "extract-place",
+            "--path",
+            source_project.to_str().unwrap(),
+            "--output",
+            place_file.to_str().unwrap(),
+            "--force",
+            "--include-assets",
+            "--json",
+        ])
+        .output()
+        .expect("run extract-place");
+
+    assert!(
+        output.status.success(),
+        "extract-place failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let summary: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("clean json stdout");
+    assert_eq!(summary["success"], true);
+    assert_eq!(summary["diagnosticCount"], 0);
+    assert_eq!(summary["assets"]["mode"], "includeLocal");
+    assert_eq!(summary["assets"]["embeddedPayloads"], 2);
+    assert_eq!(
+        summary["assets"]["manifest"],
+        serde_json::json!("assets/manifest.json")
+    );
+    assert!(place_file.exists(), "place output missing");
+
+    let imported_project = temp.path().join("imported");
+    let output = command()
+        .args([
+            "import-place",
+            place_file.to_str().unwrap(),
+            "--output",
+            imported_project.to_str().unwrap(),
+            "--force",
+            "--include-assets",
+            "--json",
+        ])
+        .output()
+        .expect("run import-place");
+    assert!(
+        output.status.success(),
+        "import-place failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let import_summary: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("clean import json stdout");
+    assert_eq!(import_summary["success"], true);
+    assert_eq!(import_summary["assets"]["mode"], "includeLocal");
+    assert!(imported_project.join("assets/manifest.json").exists());
+
+    let metadata: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(imported_project.join("src/Workspace/AssetHolder.rbxjson"))
+            .expect("asset holder metadata"),
+    )
+    .expect("metadata json");
+    let binary_file = metadata["properties"]["BinaryData"]["value"]["file"]
+        .as_str()
+        .expect("binary file");
+    let shared_file = metadata["properties"]["SharedData"]["value"]["file"]
+        .as_str()
+        .expect("shared file");
+    assert_eq!(
+        std::fs::read(imported_project.join(binary_file)).expect("binary payload"),
+        vec![1, 2, 3, 4]
+    );
+    assert_eq!(
+        std::fs::read(imported_project.join(shared_file)).expect("shared payload"),
+        vec![5, 6, 7, 8]
+    );
+}

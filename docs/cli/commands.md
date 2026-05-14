@@ -104,6 +104,33 @@ rbxsync build --watch
 rbxsync build --plugin MyPlugin.rbxm
 ```
 
+### import-place
+Import a local Roblox place file into a RbxSync project.
+
+```bash
+rbxsync import-place <INPUT> [OPTIONS]
+```
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `<INPUT>` | Required | Input `.rbxl` or `.rbxlx` file |
+| `-o, --output` | Current dir | Output project directory |
+| `--name` | Input stem | Project name for generated config |
+| `--services` | All services | Comma-separated services to import |
+| `--terrain` | false | Include Terrain metadata instances |
+| `--force` | false | Replace an existing `src/` tree |
+| `--no-backup` | false | Replace `src/` without `.rbxsync-backup/src` |
+| `--tooling` / `--no-tooling` | Project config | Control generated tooling files |
+| `--include-assets` | false | Write `assets/manifest.json` and local embedded payload files |
+| `--no-assets` | false | Preserve inline asset metadata and do not write `assets/` |
+| `--dry-run` | false | Parse and summarize without writing |
+| `--json` | false | Emit machine-readable JSON |
+
+`--include-assets` extracts embedded `BinaryString` and `SharedString`
+payloads to `assets/blobs/` and records them in `assets/manifest.json`.
+External `Content` asset IDs are preserved as references and are not
+downloaded.
+
 ### extract-place
 Export a RbxSync project to a local Roblox place file.
 
@@ -122,6 +149,8 @@ rbxsync extract-place [OPTIONS]
 | `--strict` | false | Fail if diagnostics are produced |
 | `--services` | All services | Comma-separated services to export |
 | `--no-packages` | false | Skip package folders |
+| `--include-assets` | false | Read `assets/manifest.json` and embed file-backed payloads |
+| `--no-assets` | false | Ignore `assets/manifest.json` and only use inline metadata |
 
 Examples:
 
@@ -129,6 +158,7 @@ Examples:
 rbxsync extract-place --path ./GameProject --output ./build/Game.rbxl --force
 rbxsync extract-place --path ./GameProject --output ./build/Game.rbxlx --force
 rbxsync extract-place --path ./GameProject --dry-run --json
+rbxsync extract-place --path ./GameProject --include-assets --output ./build/Game.rbxl --force
 ```
 
 This command creates local place files only. Use `publish-place` to upload the

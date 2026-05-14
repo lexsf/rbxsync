@@ -24,13 +24,84 @@ fn write_fixture_project(project_dir: &Path) {
   "name": "Baseplate",
   "properties": {
     "Anchored": { "type": "bool", "value": true },
-    "Position": { "type": "Vector3", "value": { "x": 1.0, "y": 2.0, "z": 3.0 } }
+    "BinaryData": { "type": "BinaryString", "value": "AQIDBA==" },
+    "Image": { "type": "Content", "value": "rbxassetid://123456" },
+    "Position": { "type": "Vector3", "value": { "x": 1.0, "y": 2.0, "z": 3.0 } },
+    "SharedData": {
+      "type": "SharedString",
+      "value": {
+        "hash": "fixture-shared",
+        "file": null,
+        "data": "BQYHCA=="
+      }
+    }
   }
 }"#,
     )
     .expect("baseplate metadata");
 
     std::fs::write(server.join("Main.server.luau"), "print('import fixture')").expect("script");
+}
+
+#[test]
+fn import_place_include_assets_writes_manifest_and_blobs() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let source_project = temp.path().join("source");
+    let place_file = temp.path().join("basic.rbxl");
+    let imported_project = temp.path().join("imported");
+    write_fixture_project(&source_project);
+    build_place(&source_project, &place_file, "rbxl");
+
+    let output = command()
+        .args([
+            "import-place",
+            place_file.to_str().unwrap(),
+            "--output",
+            imported_project.to_str().unwrap(),
+            "--force",
+            "--include-assets",
+            "--json",
+        ])
+        .output()
+        .expect("run import-place");
+
+    assert!(
+        output.status.success(),
+        "import-place failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let summary: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("clean json stdout");
+    assert_eq!(summary["success"], true);
+    assert_eq!(summary["assets"]["mode"], "includeLocal");
+    assert_eq!(summary["assets"]["contentReferences"], 0);
+    assert!(summary["assets"]["embeddedPayloads"].as_u64().unwrap() >= 2);
+    assert!(summary["assets"]["filesWritten"].as_u64().unwrap() >= 2);
+    assert!(summary["assets"]["bytesWritten"].as_u64().unwrap() >= 8);
+
+    assert!(imported_project.join("assets/manifest.json").exists());
+    let blobs = std::fs::read_dir(imported_project.join("assets/blobs"))
+        .expect("blob dir")
+        .count();
+    assert!(blobs >= 2);
+
+    let metadata: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(imported_project.join("src/Workspace/Baseplate.rbxjson"))
+            .expect("baseplate metadata"),
+    )
+    .expect("metadata json");
+    let binary_file = metadata["properties"]["BinaryData"]["value"]["file"]
+        .as_str()
+        .expect("binary file");
+    let shared_file = metadata["properties"]["SharedData"]["value"]["file"]
+        .as_str()
+        .expect("shared file");
+    assert!(binary_file.starts_with("assets/blobs/"));
+    assert!(shared_file.starts_with("assets/blobs/"));
+    assert!(metadata["properties"]["SharedData"]["value"]
+        .get("data")
+        .is_none());
 }
 
 fn build_place(source_project: &Path, output: &Path, format: &str) {

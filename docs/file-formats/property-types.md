@@ -170,6 +170,52 @@ Asset URLs:
 }
 ```
 
+`Content` values are preserved as references. `import-place --include-assets`
+records them in `assets/manifest.json`, but it does not download external
+Roblox assets.
+
+## BinaryString and SharedString Assets
+
+Inline binary values are still supported:
+```json
+"BinaryData": {
+  "type": "BinaryString",
+  "value": "AQIDBA=="
+}
+```
+
+When `import-place --include-assets` extracts embedded payloads, metadata may
+reference a project-relative blob file:
+```json
+"BinaryData": {
+  "type": "BinaryString",
+  "value": {
+    "file": "assets/blobs/<sha256>.bin",
+    "encoding": "raw",
+    "sha256": "<sha256>",
+    "byteLength": 4
+  }
+}
+```
+
+`SharedString` supports the same file-backed layout while preserving the
+Roblox shared-string hash:
+```json
+"SharedData": {
+  "type": "SharedString",
+  "value": {
+    "hash": "<roblox-shared-string-hash>",
+    "file": "assets/blobs/<sha256>.bin",
+    "sha256": "<sha256>",
+    "byteLength": 4
+  }
+}
+```
+
+`extract-place --include-assets` reads these file-backed payloads and embeds
+the bytes into the generated place file. Paths must stay inside the project
+directory.
+
 ## Font Type
 
 ```json
@@ -203,4 +249,6 @@ Asset URLs:
 | `NumberRange` | `{ "min": 0, "max": 100 }` |
 | `Enum` | `{ "enumType": "...", "value": "..." }` |
 | `Content` | `"rbxassetid://123456"` |
+| `BinaryString` | base64 string or file-backed object |
+| `SharedString` | `{ "hash": "...", "data": "..." }` or file-backed object |
 | `Font` | `{ "family": "...", "weight": 400, "style": "..." }` |

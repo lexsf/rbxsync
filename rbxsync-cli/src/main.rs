@@ -12,9 +12,10 @@ use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
 use notify::{Config, RecommendedWatcher, RecursiveMode, Watcher};
 use rbxsync_core::{
-    build_plugin, export_place, find_existing_rbxsync_plugin, find_rojo_project,
-    get_studio_plugins_folder, import_place_file, install_plugin, parse_rojo_project,
-    rojo_to_tree_mapping, write_serialized_instances, ExtractWriterOptions, PlaceExportFormat,
+    build_plugin, discover_assets, export_place, extract_embedded_assets,
+    find_existing_rbxsync_plugin, find_rojo_project, get_studio_plugins_folder, import_place_file,
+    install_plugin, parse_rojo_project, rojo_to_tree_mapping, summarize_assets,
+    write_serialized_instances, AssetMode, AssetSummary, ExtractWriterOptions, PlaceExportFormat,
     PlaceExportOptions, PlaceImportOptions, PluginBuildConfig, ProjectConfig, PublishPlaceOptions,
     PublishPlaceSummary, PublishVersionType,
 };
@@ -232,6 +233,14 @@ enum Commands {
         /// Skip package folders in the exported place
         #[arg(long)]
         no_packages: bool,
+
+        /// Read local assets/manifest.json and file-backed binary payloads
+        #[arg(long, conflicts_with = "no_assets")]
+        include_assets: bool,
+
+        /// Ignore assets/manifest.json and file-backed asset payloads
+        #[arg(long)]
+        no_assets: bool,
     },
 
     /// Publish a .rbxl or .rbxlx place file to Roblox Open Cloud
@@ -324,6 +333,14 @@ enum Commands {
         /// Suppress human-readable progress output
         #[arg(short, long)]
         quiet: bool,
+
+        /// Write assets/manifest.json and local embedded payload files
+        #[arg(long, conflicts_with = "no_assets")]
+        include_assets: bool,
+
+        /// Preserve inline asset metadata and do not write assets/
+        #[arg(long)]
+        no_assets: bool,
     },
 
     /// Format project JSON files with consistent style
@@ -742,8 +759,11 @@ async fn main() -> Result<()> {
             services,
             include_packages,
             no_packages,
+            include_assets,
+            no_assets,
         } => {
             let include_packages = include_packages || !no_packages;
+            let asset_mode = resolve_asset_mode(include_assets, no_assets);
             cmd_extract_place(
                 path,
                 output,
@@ -755,6 +775,7 @@ async fn main() -> Result<()> {
                 strict,
                 services,
                 include_packages,
+                asset_mode,
             )
             .await?;
         }
@@ -796,8 +817,11 @@ async fn main() -> Result<()> {
             dry_run,
             json,
             quiet,
+            include_assets,
+            no_assets,
         } => {
             let backup = backup || !no_backup;
+            let asset_mode = resolve_asset_mode(include_assets, no_assets);
             let tooling = if tooling {
                 Some(true)
             } else if no_tooling {
@@ -807,7 +831,7 @@ async fn main() -> Result<()> {
             };
             cmd_import_place(
                 input, output, name, services, terrain, force, backup, tooling, dry_run, json,
-                quiet,
+                quiet, asset_mode,
             )
             .await?;
         }
@@ -1325,6 +1349,7 @@ async fn cmd_import_place(
     dry_run: bool,
     json_output: bool,
     quiet: bool,
+    asset_mode: AssetMode,
 ) -> Result<()> {
     let input_path = input
         .canonicalize()
@@ -1374,6 +1399,18 @@ async fn cmd_import_place(
     let scripts_planned = count_scripts(&import_result.instances);
     let generate_tooling_files = tooling_override.unwrap_or(config.config.generate_tooling_files);
     let tooling_files = tooling_file_names(generate_tooling_files);
+    let dry_run_asset_summary = if asset_mode == AssetMode::IncludeLocal {
+        let entries = discover_assets(&import_result.instances);
+        Some(summarize_assets(
+            asset_mode,
+            Some("assets/manifest.json".to_string()),
+            &entries,
+            0,
+            0,
+        ))
+    } else {
+        None
+    };
 
     if dry_run {
         if json_output || !quiet {
@@ -1392,6 +1429,7 @@ async fn cmd_import_place(
                 &tooling_files,
                 false,
                 backup_existing_src,
+                dry_run_asset_summary.as_ref(),
             )?;
         }
         return Ok(());
@@ -1423,9 +1461,20 @@ async fn cmd_import_place(
         std::fs::write(&config_path, config_json).context("Failed to write rbxsync.json")?;
     }
 
+    let (instances_to_write, asset_summary) = if asset_mode == AssetMode::IncludeLocal {
+        let extraction = extract_embedded_assets(
+            import_result.instances.clone(),
+            &project_dir,
+            "rbxsync import-place",
+        )?;
+        (extraction.instances, Some(extraction.summary))
+    } else {
+        (import_result.instances.clone(), None)
+    };
+
     let (preserve_packages, packages_folder) = package_writer_options(&config);
     let writer_summary = write_serialized_instances(
-        import_result.instances.clone(),
+        instances_to_write,
         ExtractWriterOptions {
             project_dir: project_dir.clone(),
             tree_mapping: config.tree_mapping.clone(),
@@ -1453,6 +1502,7 @@ async fn cmd_import_place(
             &tooling_files,
             writer_summary.packages_preserved,
             backup_existing_src,
+            asset_summary.as_ref(),
         )?;
     }
 
@@ -1482,6 +1532,16 @@ fn package_writer_options(config: &ProjectConfig) -> (bool, String) {
     }
 }
 
+fn resolve_asset_mode(include_assets: bool, no_assets: bool) -> AssetMode {
+    if include_assets {
+        AssetMode::IncludeLocal
+    } else if no_assets {
+        AssetMode::Disabled
+    } else {
+        AssetMode::ReferencesOnly
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn cmd_extract_place(
     path: Option<PathBuf>,
@@ -1494,6 +1554,7 @@ async fn cmd_extract_place(
     strict: bool,
     services: Option<Vec<String>>,
     include_packages: bool,
+    asset_mode: AssetMode,
 ) -> Result<()> {
     let project_dir_input = path.unwrap_or(std::env::current_dir()?);
     let project_dir = project_dir_input
@@ -1547,6 +1608,7 @@ async fn cmd_extract_place(
         services: selected_services,
         include_packages,
         tree_mapping,
+        asset_mode,
     })?;
 
     if json_output || !quiet {
@@ -1744,6 +1806,7 @@ fn print_import_summary(
     tooling_files: &[&str],
     packages_preserved: bool,
     backup_existing_src: bool,
+    asset_summary: Option<&AssetSummary>,
 ) -> Result<()> {
     if json_output {
         let diagnostic_summary = diagnostic_summary(diagnostics);
@@ -1767,6 +1830,7 @@ fn print_import_summary(
                 "toolingFiles": tooling_files,
                 "packagesPreserved": packages_preserved,
                 "backupExistingSrc": backup_existing_src,
+                "assets": asset_summary,
             }))?
         );
         return Ok(());
@@ -1805,6 +1869,10 @@ fn print_import_summary(
 
     if packages_preserved {
         println!("Preserved packages from existing project backup");
+    }
+
+    if let Some(asset_summary) = asset_summary {
+        print_asset_summary(asset_summary);
     }
 
     if !diagnostics.is_empty() {
@@ -1874,6 +1942,7 @@ fn print_export_summary(
                 "diagnostics": summary.diagnostics,
                 "diagnosticCount": summary.diagnostics.len(),
                 "diagnosticSummary": diagnostic_summary,
+                "assets": summary.asset_summary,
             }))?
         );
         return Ok(());
@@ -1896,6 +1965,10 @@ fn print_export_summary(
     }
     if !summary.services.is_empty() {
         println!("Services: {}", summary.services.join(", "));
+    }
+
+    if let Some(asset_summary) = summary.asset_summary.as_ref() {
+        print_asset_summary(asset_summary);
     }
 
     if !summary.diagnostics.is_empty() {
@@ -1925,6 +1998,23 @@ fn print_export_summary(
     }
 
     Ok(())
+}
+
+fn print_asset_summary(summary: &AssetSummary) {
+    println!(
+        "Assets: mode={:?}, content references={}, embedded payloads={}",
+        summary.mode, summary.content_references, summary.embedded_payloads
+    );
+    if let Some(manifest) = &summary.manifest {
+        println!("Asset manifest: {}", manifest);
+    }
+    if summary.files_written > 0 {
+        println!(
+            "Wrote {} asset files ({:.1} KB)",
+            summary.files_written,
+            summary.bytes_written as f64 / 1024.0
+        );
+    }
 }
 
 fn export_diagnostic_summary(
@@ -3119,6 +3209,7 @@ fn do_build(
         services: None,
         include_packages: true,
         tree_mapping: Default::default(),
+        asset_mode: AssetMode::ReferencesOnly,
     })?;
 
     println!("Built successfully: {}", output_path.display());

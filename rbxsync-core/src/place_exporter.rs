@@ -17,7 +17,10 @@ use rbx_dom_weak::{InstanceBuilder, WeakDom};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::{is_package_path, ProjectConfig};
+use crate::{
+    is_package_path, load_asset_manifest, read_asset_file, summarize_assets, AssetFileErrorKind,
+    AssetMode, AssetSummary, ProjectConfig,
+};
 
 /// Roblox artifact format produced from project files.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -80,6 +83,7 @@ pub struct PlaceExportOptions {
     pub services: Option<HashSet<String>>,
     pub include_packages: bool,
     pub tree_mapping: HashMap<String, String>,
+    pub asset_mode: AssetMode,
 }
 
 /// Non-fatal export diagnostic category.
@@ -101,6 +105,10 @@ pub enum PlaceExportDiagnosticKind {
     UnsupportedTerrainVoxelData,
     OutputExists,
     PublishNotImplemented,
+    MissingAssetFile,
+    InvalidAssetManifest,
+    AssetHashMismatch,
+    AssetPathOutsideProject,
 }
 
 /// Non-fatal exporter diagnostic.
@@ -123,6 +131,7 @@ pub struct PlaceExportSummary {
     pub services: Vec<String>,
     pub bytes_written: Option<u64>,
     pub diagnostics: Vec<PlaceExportDiagnostic>,
+    pub asset_summary: Option<AssetSummary>,
 }
 
 #[derive(Debug)]
@@ -185,11 +194,19 @@ pub fn export_place(options: PlaceExportOptions) -> Result<PlaceExportSummary> {
     }
 
     diagnostics.extend(validate_tree_mapping(&options));
+    let asset_summary = summarize_manifest_assets(&options, &mut diagnostics);
     let BuildResult {
         dom,
         diagnostics: build_diagnostics,
     } = build_project_dom(options.clone())?;
     diagnostics.extend(build_diagnostics);
+
+    if let Some(diagnostic) = first_fatal_asset_diagnostic(&diagnostics) {
+        bail!(
+            "Export failed with asset diagnostic: {}",
+            diagnostic.message
+        );
+    }
 
     if options.strict && !diagnostics.is_empty() {
         bail!(
@@ -199,7 +216,7 @@ pub fn export_place(options: PlaceExportOptions) -> Result<PlaceExportSummary> {
         );
     }
 
-    let mut summary = summarize_dom(&dom, &options, diagnostics);
+    let mut summary = summarize_dom(&dom, &options, diagnostics, asset_summary);
 
     if !options.dry_run {
         write_dom(&dom, &options)?;
@@ -383,6 +400,7 @@ fn summarize_dom(
     dom: &WeakDom,
     options: &PlaceExportOptions,
     diagnostics: Vec<PlaceExportDiagnostic>,
+    asset_summary: Option<AssetSummary>,
 ) -> PlaceExportSummary {
     let mut instances = 0;
     let mut scripts = 0;
@@ -404,7 +422,54 @@ fn summarize_dom(
         services,
         bytes_written: None,
         diagnostics,
+        asset_summary,
     }
+}
+
+fn summarize_manifest_assets(
+    options: &PlaceExportOptions,
+    diagnostics: &mut Vec<PlaceExportDiagnostic>,
+) -> Option<AssetSummary> {
+    if options.asset_mode != AssetMode::IncludeLocal {
+        return None;
+    }
+
+    let manifest_path = options.project_dir.join("assets/manifest.json");
+    if !manifest_path.exists() {
+        return None;
+    }
+
+    match load_asset_manifest(&manifest_path) {
+        Ok(manifest) => Some(summarize_assets(
+            options.asset_mode,
+            Some("assets/manifest.json".to_string()),
+            &manifest.entries,
+            0,
+            0,
+        )),
+        Err(error) => {
+            diagnostics.push(PlaceExportDiagnostic {
+                kind: PlaceExportDiagnosticKind::InvalidAssetManifest,
+                path: manifest_path.display().to_string(),
+                property: None,
+                message: error.to_string(),
+            });
+            None
+        }
+    }
+}
+
+fn first_fatal_asset_diagnostic(
+    diagnostics: &[PlaceExportDiagnostic],
+) -> Option<&PlaceExportDiagnostic> {
+    diagnostics.iter().find(|diagnostic| {
+        matches!(
+            diagnostic.kind,
+            PlaceExportDiagnosticKind::MissingAssetFile
+                | PlaceExportDiagnosticKind::AssetHashMismatch
+                | PlaceExportDiagnosticKind::AssetPathOutsideProject
+        )
+    })
 }
 
 fn count_instance_tree(dom: &WeakDom, referent: Ref, instances: &mut usize, scripts: &mut usize) {
@@ -713,7 +778,7 @@ impl DomBuilder {
                     });
                     continue;
                 }
-                match json_to_variant(property_value) {
+                match self.json_to_variant(property_value, dm_path, property_name) {
                     PropertyConversion::Value(value) => {
                         builder = builder.with_property(property_name, value);
                     }
@@ -753,7 +818,8 @@ impl DomBuilder {
         let mut attributes = Attributes::new();
 
         for (name, value) in attrs {
-            match json_to_variant(value) {
+            let property_name = format!("attributes.{}", name);
+            match self.json_to_variant(value, dm_path, &property_name) {
                 PropertyConversion::Value(value) => {
                     attributes.insert(name.clone(), value);
                 }
@@ -761,7 +827,7 @@ impl DomBuilder {
                     self.diagnostics.push(PlaceExportDiagnostic {
                         kind: PlaceExportDiagnosticKind::UnsupportedAttribute,
                         path: dm_path.to_string(),
-                        property: Some(format!("attributes.{}", name)),
+                        property: Some(property_name),
                         message: format!("Unsupported attribute value for '{}'", name),
                     });
                 }
@@ -798,6 +864,194 @@ impl DomBuilder {
         }
 
         Some(Variant::Tags(tags))
+    }
+
+    fn json_to_variant(
+        &mut self,
+        value: &Value,
+        dm_path: &str,
+        property_name: &str,
+    ) -> PropertyConversion {
+        let Some(obj) = value.as_object() else {
+            return direct_json_to_variant(value)
+                .map(PropertyConversion::Value)
+                .unwrap_or(PropertyConversion::Unsupported);
+        };
+        let Some(type_str) = obj
+            .get("type")
+            .and_then(|property_type| property_type.as_str())
+        else {
+            return direct_json_to_variant(value)
+                .map(PropertyConversion::Value)
+                .unwrap_or(PropertyConversion::Unsupported);
+        };
+        let val = obj.get("value").unwrap_or(&Value::Null);
+
+        let converted = match type_str {
+            "string" => val.as_str().map(|value| Variant::String(value.to_string())),
+            "int" | "int32" => val.as_i64().map(|value| Variant::Int32(value as i32)),
+            "int64" => val.as_i64().map(Variant::Int64),
+            "float" | "float32" => val.as_f64().map(|value| Variant::Float32(value as f32)),
+            "float64" | "double" => val.as_f64().map(Variant::Float64),
+            "bool" => val.as_bool().map(Variant::Bool),
+            "nil" => None,
+            "Vector2" => vector2(val).map(Variant::Vector2),
+            "Vector2int16" => vector2int16(val).map(Variant::Vector2int16),
+            "Vector3" => vector3(val).map(Variant::Vector3),
+            "Vector3int16" => vector3int16(val).map(Variant::Vector3int16),
+            "Color3" => color3(val).map(Variant::Color3),
+            "Color3uint8" => color3uint8(val).map(Variant::Color3uint8),
+            "BrickColor" => val.as_u64().map(|value| {
+                Variant::BrickColor(
+                    BrickColor::from_number(value as u16).unwrap_or(BrickColor::MediumStoneGrey),
+                )
+            }),
+            "UDim" => udim(val).map(Variant::UDim),
+            "UDim2" => udim2(val).map(Variant::UDim2),
+            "CFrame" => cframe(val).map(Variant::CFrame),
+            "OptionalCFrame" => {
+                if val.is_null() {
+                    Some(Variant::OptionalCFrame(None))
+                } else {
+                    cframe(val).map(|value| Variant::OptionalCFrame(Some(value)))
+                }
+            }
+            "Enum" => {
+                let enum_value = val
+                    .as_object()
+                    .and_then(|value| value.get("value"))
+                    .unwrap_or(val);
+                if let Some(value) = enum_value.as_u64() {
+                    Some(Variant::Enum(rbx_dom_weak::types::Enum::from_u32(
+                        value as u32,
+                    )))
+                } else {
+                    Some(Variant::Enum(rbx_dom_weak::types::Enum::from_u32(0)))
+                }
+            }
+            "Rect" => rect(val).map(Variant::Rect),
+            "NumberRange" => number_range(val).map(Variant::NumberRange),
+            "NumberSequence" => number_sequence(val).map(Variant::NumberSequence),
+            "ColorSequence" => color_sequence(val).map(Variant::ColorSequence),
+            "Font" => font(val).map(Variant::Font),
+            "Content" => val
+                .as_str()
+                .map(|value| Variant::Content(Content::from(value.to_string()))),
+            "BinaryString" => self.binary_string_variant(val, dm_path, property_name),
+            "SharedString" => self.shared_string_variant(val, dm_path, property_name),
+            "UniqueId" => val
+                .as_str()
+                .and_then(|value| UniqueId::from_str(value).ok())
+                .map(Variant::UniqueId),
+            "SecurityCapabilities" => val
+                .as_u64()
+                .map(|value| Variant::SecurityCapabilities(SecurityCapabilities::from_bits(value))),
+            "Faces" => faces(val).map(Variant::Faces),
+            "Axes" => axes(val).map(Variant::Axes),
+            "PhysicalProperties" => physical_properties(val).map(Variant::PhysicalProperties),
+            "Ray" => ray(val).map(Variant::Ray),
+            "Region3" => region3(val).map(Variant::Region3),
+            "Region3int16" => region3int16(val).map(Variant::Region3int16),
+            "Ref" => {
+                let target = if val.is_null() {
+                    None
+                } else {
+                    val.as_str().map(ToString::to_string)
+                };
+                return PropertyConversion::PendingRef(target);
+            }
+            _ => None,
+        };
+
+        converted
+            .map(PropertyConversion::Value)
+            .unwrap_or(PropertyConversion::Unsupported)
+    }
+
+    fn binary_string_variant(
+        &mut self,
+        value: &Value,
+        dm_path: &str,
+        property_name: &str,
+    ) -> Option<Variant> {
+        if let Some(encoded) = value.as_str() {
+            return general_purpose::STANDARD
+                .decode(encoded)
+                .ok()
+                .map(|value| Variant::BinaryString(BinaryString::from(value)));
+        }
+
+        let object = value.as_object()?;
+        let bytes = self.read_file_backed_asset(object, dm_path, property_name)?;
+        Some(Variant::BinaryString(BinaryString::from(bytes)))
+    }
+
+    fn shared_string_variant(
+        &mut self,
+        value: &Value,
+        dm_path: &str,
+        property_name: &str,
+    ) -> Option<Variant> {
+        let object = value.as_object()?;
+        if let Some(encoded) = object.get("data").and_then(|value| value.as_str()) {
+            return general_purpose::STANDARD
+                .decode(encoded)
+                .ok()
+                .map(|value| Variant::SharedString(SharedString::new(value)));
+        }
+
+        let bytes = self.read_file_backed_asset(object, dm_path, property_name)?;
+        Some(Variant::SharedString(SharedString::new(bytes)))
+    }
+
+    fn read_file_backed_asset(
+        &mut self,
+        object: &serde_json::Map<String, Value>,
+        dm_path: &str,
+        property_name: &str,
+    ) -> Option<Vec<u8>> {
+        if self.options.asset_mode == AssetMode::Disabled {
+            return None;
+        }
+
+        let file = object.get("file").and_then(Value::as_str)?;
+        Some(
+            match read_asset_file(
+                &self.options.project_dir,
+                file,
+                object.get("sha256").and_then(Value::as_str),
+            ) {
+                Ok(bytes) => bytes,
+                Err(error) => {
+                    let kind = match error.kind() {
+                        AssetFileErrorKind::Missing => PlaceExportDiagnosticKind::MissingAssetFile,
+                        AssetFileErrorKind::OutsideProject => {
+                            PlaceExportDiagnosticKind::AssetPathOutsideProject
+                        }
+                        AssetFileErrorKind::HashMismatch => {
+                            PlaceExportDiagnosticKind::AssetHashMismatch
+                        }
+                    };
+                    self.push_asset_diagnostic(kind, dm_path, property_name, error.to_string());
+                    return None;
+                }
+            },
+        )
+    }
+
+    fn push_asset_diagnostic(
+        &mut self,
+        kind: PlaceExportDiagnosticKind,
+        dm_path: &str,
+        property_name: &str,
+        message: String,
+    ) {
+        self.diagnostics.push(PlaceExportDiagnostic {
+            kind,
+            path: dm_path.to_string(),
+            property: Some(property_name.to_string()),
+            message,
+        });
     }
 
     fn read_metadata(&mut self, path: &Path, dm_path: &str) -> Option<Value> {
@@ -976,111 +1230,6 @@ enum PropertyConversion {
     Value(Variant),
     PendingRef(Option<String>),
     Unsupported,
-}
-
-fn json_to_variant(value: &Value) -> PropertyConversion {
-    let Some(obj) = value.as_object() else {
-        return direct_json_to_variant(value)
-            .map(PropertyConversion::Value)
-            .unwrap_or(PropertyConversion::Unsupported);
-    };
-    let Some(type_str) = obj
-        .get("type")
-        .and_then(|property_type| property_type.as_str())
-    else {
-        return direct_json_to_variant(value)
-            .map(PropertyConversion::Value)
-            .unwrap_or(PropertyConversion::Unsupported);
-    };
-    let val = obj.get("value").unwrap_or(&Value::Null);
-
-    let converted = match type_str {
-        "string" => val.as_str().map(|value| Variant::String(value.to_string())),
-        "int" | "int32" => val.as_i64().map(|value| Variant::Int32(value as i32)),
-        "int64" => val.as_i64().map(Variant::Int64),
-        "float" | "float32" => val.as_f64().map(|value| Variant::Float32(value as f32)),
-        "float64" | "double" => val.as_f64().map(Variant::Float64),
-        "bool" => val.as_bool().map(Variant::Bool),
-        "nil" => None,
-        "Vector2" => vector2(val).map(Variant::Vector2),
-        "Vector2int16" => vector2int16(val).map(Variant::Vector2int16),
-        "Vector3" => vector3(val).map(Variant::Vector3),
-        "Vector3int16" => vector3int16(val).map(Variant::Vector3int16),
-        "Color3" => color3(val).map(Variant::Color3),
-        "Color3uint8" => color3uint8(val).map(Variant::Color3uint8),
-        "BrickColor" => val.as_u64().map(|value| {
-            Variant::BrickColor(
-                BrickColor::from_number(value as u16).unwrap_or(BrickColor::MediumStoneGrey),
-            )
-        }),
-        "UDim" => udim(val).map(Variant::UDim),
-        "UDim2" => udim2(val).map(Variant::UDim2),
-        "CFrame" => cframe(val).map(Variant::CFrame),
-        "OptionalCFrame" => {
-            if val.is_null() {
-                Some(Variant::OptionalCFrame(None))
-            } else {
-                cframe(val).map(|value| Variant::OptionalCFrame(Some(value)))
-            }
-        }
-        "Enum" => {
-            let enum_value = val
-                .as_object()
-                .and_then(|value| value.get("value"))
-                .unwrap_or(val);
-            if let Some(value) = enum_value.as_u64() {
-                Some(Variant::Enum(rbx_dom_weak::types::Enum::from_u32(
-                    value as u32,
-                )))
-            } else {
-                Some(Variant::Enum(rbx_dom_weak::types::Enum::from_u32(0)))
-            }
-        }
-        "Rect" => rect(val).map(Variant::Rect),
-        "NumberRange" => number_range(val).map(Variant::NumberRange),
-        "NumberSequence" => number_sequence(val).map(Variant::NumberSequence),
-        "ColorSequence" => color_sequence(val).map(Variant::ColorSequence),
-        "Font" => font(val).map(Variant::Font),
-        "Content" => val
-            .as_str()
-            .map(|value| Variant::Content(Content::from(value.to_string()))),
-        "BinaryString" => val
-            .as_str()
-            .and_then(|value| general_purpose::STANDARD.decode(value).ok())
-            .map(|value| Variant::BinaryString(BinaryString::from(value))),
-        "SharedString" => val
-            .as_object()
-            .and_then(|value| value.get("data"))
-            .and_then(|value| value.as_str())
-            .and_then(|value| general_purpose::STANDARD.decode(value).ok())
-            .map(|value| Variant::SharedString(SharedString::new(value))),
-        "UniqueId" => val
-            .as_str()
-            .and_then(|value| UniqueId::from_str(value).ok())
-            .map(Variant::UniqueId),
-        "SecurityCapabilities" => val
-            .as_u64()
-            .map(|value| Variant::SecurityCapabilities(SecurityCapabilities::from_bits(value))),
-        "Faces" => faces(val).map(Variant::Faces),
-        "Axes" => axes(val).map(Variant::Axes),
-        "PhysicalProperties" => physical_properties(val).map(Variant::PhysicalProperties),
-        "Ray" => ray(val).map(Variant::Ray),
-        "Region3" => region3(val).map(Variant::Region3),
-        "Region3int16" => region3int16(val).map(Variant::Region3int16),
-        "Ref" => {
-            let target = if val.is_null() {
-                None
-            } else {
-                val.as_str().map(ToString::to_string)
-            };
-            return PropertyConversion::PendingRef(target);
-        }
-        _ => None,
-    };
-
-    converted
-        .map(PropertyConversion::Value)
-        .unwrap_or(PropertyConversion::Unsupported)
 }
 
 fn direct_json_to_variant(value: &Value) -> Option<Variant> {
@@ -1375,6 +1524,7 @@ mod tests {
             services: None,
             include_packages: true,
             tree_mapping: HashMap::new(),
+            asset_mode: AssetMode::ReferencesOnly,
         }
     }
 
@@ -1517,5 +1667,169 @@ mod tests {
             PlaceExportDiagnosticKind::UnsupportedProperty
         );
         assert!(!project.join("build/game.rbxl").exists());
+    }
+
+    #[test]
+    fn embeds_file_backed_binary_and_shared_string_values() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let project = temp.path();
+        std::fs::create_dir_all(project.join("src/Workspace")).expect("workspace dir");
+        std::fs::create_dir_all(project.join("assets/blobs")).expect("blobs dir");
+
+        let binary_bytes = vec![1, 2, 3, 4];
+        let shared_bytes = vec![5, 6, 7, 8];
+        let binary_hash = crate::asset_sha256_hex(&binary_bytes);
+        let shared_hash = crate::asset_sha256_hex(&shared_bytes);
+        let binary_file = format!("assets/blobs/{}.bin", binary_hash);
+        let shared_file = format!("assets/blobs/{}.bin", shared_hash);
+        std::fs::write(project.join(&binary_file), &binary_bytes).expect("binary blob");
+        std::fs::write(project.join(&shared_file), &shared_bytes).expect("shared blob");
+
+        std::fs::write(
+            project.join("src/Workspace/AssetHolder.rbxjson"),
+            serde_json::to_string_pretty(&json!({
+                "className": "Folder",
+                "properties": {
+                    "BinaryData": {
+                        "type": "BinaryString",
+                        "value": {
+                            "file": binary_file,
+                            "encoding": "raw",
+                            "sha256": binary_hash,
+                            "byteLength": 4
+                        }
+                    },
+                    "SharedData": {
+                        "type": "SharedString",
+                        "value": {
+                            "hash": "shared-hash",
+                            "file": shared_file,
+                            "sha256": shared_hash,
+                            "byteLength": 4
+                        }
+                    }
+                }
+            }))
+            .unwrap(),
+        )
+        .expect("metadata");
+
+        let result = build_project_dom(options(project)).expect("build dom");
+        assert!(result.diagnostics.is_empty());
+
+        let root = result.dom.root_ref();
+        let workspace = child_named(&result.dom, root, "Workspace");
+        let asset_holder = child_named(&result.dom, workspace, "AssetHolder");
+        let instance = result
+            .dom
+            .get_by_ref(asset_holder)
+            .expect("asset holder instance");
+
+        assert!(matches!(
+            instance.properties.get("BinaryData"),
+            Some(Variant::BinaryString(value))
+                if <BinaryString as AsRef<[u8]>>::as_ref(value) == binary_bytes.as_slice()
+        ));
+        assert!(matches!(
+            instance.properties.get("SharedData"),
+            Some(Variant::SharedString(value)) if value.data() == shared_bytes.as_slice()
+        ));
+    }
+
+    #[test]
+    fn file_backed_asset_hash_mismatch_fails_export() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let project = temp.path();
+        std::fs::create_dir_all(project.join("src/Workspace")).expect("workspace dir");
+        std::fs::create_dir_all(project.join("assets/blobs")).expect("blobs dir");
+        std::fs::write(project.join("assets/blobs/blob.bin"), [1, 2, 3, 4]).expect("blob");
+        std::fs::write(
+            project.join("src/Workspace/AssetHolder.rbxjson"),
+            serde_json::to_string_pretty(&json!({
+                "className": "Folder",
+                "properties": {
+                    "BinaryData": {
+                        "type": "BinaryString",
+                        "value": {
+                            "file": "assets/blobs/blob.bin",
+                            "sha256": "0000"
+                        }
+                    }
+                }
+            }))
+            .unwrap(),
+        )
+        .expect("metadata");
+
+        let error = export_place(options(project)).expect_err("hash mismatch should fail");
+        assert!(error.to_string().contains("sha256 mismatch"));
+    }
+
+    #[test]
+    fn file_backed_asset_outside_project_fails_export() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let outside = tempfile::NamedTempFile::new().expect("outside file");
+        std::fs::write(outside.path(), [1, 2, 3, 4]).expect("outside bytes");
+
+        let project = temp.path();
+        std::fs::create_dir_all(project.join("src/Workspace")).expect("workspace dir");
+        std::fs::write(
+            project.join("src/Workspace/AssetHolder.rbxjson"),
+            serde_json::to_string_pretty(&json!({
+                "className": "Folder",
+                "properties": {
+                    "BinaryData": {
+                        "type": "BinaryString",
+                        "value": {
+                            "file": outside.path().display().to_string()
+                        }
+                    }
+                }
+            }))
+            .unwrap(),
+        )
+        .expect("metadata");
+
+        let error = export_place(options(project)).expect_err("outside path should fail");
+        assert!(error
+            .to_string()
+            .contains("must be relative to the project"));
+    }
+
+    #[test]
+    fn include_local_summary_reports_manifest_asset_counts() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let project = temp.path();
+        std::fs::create_dir_all(project.join("src/Workspace")).expect("workspace dir");
+        let manifest = crate::build_asset_manifest(
+            "test",
+            vec![crate::AssetEntry {
+                id: "content:Workspace/Sound:SoundId".to_string(),
+                kind: crate::AssetKind::Content,
+                source: crate::AssetSource::ExternalReference,
+                instance_path: "Workspace/Sound".to_string(),
+                property: "SoundId".to_string(),
+                original: Some("rbxassetid://123456".to_string()),
+                file: None,
+                sha256: None,
+                byte_length: None,
+                status: crate::AssetStatus::ReferencedOnly,
+            }],
+        );
+        crate::write_asset_manifest(&project.join("assets/manifest.json"), &manifest)
+            .expect("write manifest");
+
+        let mut options = options(project);
+        options.asset_mode = AssetMode::IncludeLocal;
+        let summary = export_place(options).expect("export summary");
+
+        let asset_summary = summary.asset_summary.expect("asset summary");
+        assert_eq!(asset_summary.mode, AssetMode::IncludeLocal);
+        assert_eq!(
+            asset_summary.manifest.as_deref(),
+            Some("assets/manifest.json")
+        );
+        assert_eq!(asset_summary.content_references, 1);
+        assert_eq!(asset_summary.embedded_payloads, 0);
     }
 }
