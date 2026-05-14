@@ -327,8 +327,108 @@ fn import_place_reports_missing_requested_service() {
     let summary: serde_json::Value =
         serde_json::from_slice(&output.stdout).expect("clean json stdout");
     assert_eq!(summary["success"], true);
+    assert_eq!(summary["strict"], false);
     assert_eq!(summary["diagnosticCount"], 1);
     assert_eq!(summary["diagnosticSummary"]["missingService"], 1);
     assert_eq!(summary["diagnostics"][0]["kind"], "missingService");
     assert_eq!(summary["services"], serde_json::json!(["Workspace"]));
+}
+
+#[test]
+fn import_place_strict_dry_run_fails_on_diagnostics_with_json_summary() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let source_project = temp.path().join("source");
+    let place_file = temp.path().join("basic.rbxlx");
+    let imported_project = temp.path().join("imported");
+    write_fixture_project(&source_project);
+    build_place(&source_project, &place_file, "rbxlx");
+
+    let output = command()
+        .args([
+            "import-place",
+            place_file.to_str().unwrap(),
+            "--output",
+            imported_project.to_str().unwrap(),
+            "--services",
+            "Workspace,MissingService",
+            "--dry-run",
+            "--strict",
+            "--json",
+        ])
+        .output()
+        .expect("run strict import-place dry-run");
+
+    assert!(
+        !output.status.success(),
+        "strict dry-run should fail when diagnostics are present"
+    );
+
+    let summary: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("clean failure json stdout");
+    assert_eq!(summary["success"], false);
+    assert_eq!(summary["strict"], true);
+    assert_eq!(summary["dryRun"], true);
+    assert_eq!(summary["diagnosticCount"], 1);
+    assert_eq!(summary["diagnosticSummary"]["missingService"], 1);
+    assert_eq!(summary["diagnostics"][0]["kind"], "missingService");
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("strict mode"),
+        "stderr should explain strict failure: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        !imported_project.exists(),
+        "strict dry-run should not create output project"
+    );
+}
+
+#[test]
+fn import_place_strict_fails_before_writing_project_files() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let source_project = temp.path().join("source");
+    let place_file = temp.path().join("basic.rbxlx");
+    let imported_project = temp.path().join("imported");
+    write_fixture_project(&source_project);
+    build_place(&source_project, &place_file, "rbxlx");
+
+    let output = command()
+        .args([
+            "import-place",
+            place_file.to_str().unwrap(),
+            "--output",
+            imported_project.to_str().unwrap(),
+            "--services",
+            "Workspace,MissingService",
+            "--strict",
+            "--json",
+        ])
+        .output()
+        .expect("run strict import-place");
+
+    assert!(
+        !output.status.success(),
+        "strict import should fail when diagnostics are present"
+    );
+
+    let summary: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("clean failure json stdout");
+    assert_eq!(summary["success"], false);
+    assert_eq!(summary["strict"], true);
+    assert_eq!(summary["dryRun"], false);
+    assert_eq!(summary["diagnosticCount"], 1);
+    assert_eq!(summary["diagnosticSummary"]["missingService"], 1);
+    assert_eq!(summary["diagnostics"][0]["kind"], "missingService");
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("strict mode"),
+        "stderr should explain strict failure: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        !imported_project.join("src").exists(),
+        "strict import should fail before writing src"
+    );
+    assert!(
+        !imported_project.join("rbxsync.json").exists(),
+        "strict import should fail before writing config"
+    );
 }

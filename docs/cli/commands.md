@@ -124,7 +124,17 @@ rbxsync import-place <INPUT> [OPTIONS]
 | `--include-assets` | false | Write `assets/manifest.json` and local embedded payload files |
 | `--no-assets` | false | Preserve inline asset metadata and do not write `assets/` |
 | `--dry-run` | false | Parse and summarize without writing |
+| `--strict` | false | Fail if diagnostics are produced |
 | `--json` | false | Emit machine-readable JSON |
+
+Diagnostics are warnings by default. Use `--strict` to turn those diagnostics
+into a non-zero exit status for deterministic validation. In CI, combine it
+with `--dry-run` and `--json` to validate a place file without writing project
+files:
+
+```bash
+rbxsync import-place ./Game.rbxl --output ./GameProject --dry-run --strict --json
+```
 
 `--include-assets` extracts embedded `BinaryString` and `SharedString`
 payloads to `assets/blobs/` and records them in `assets/manifest.json`.

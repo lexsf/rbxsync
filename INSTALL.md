@@ -95,6 +95,7 @@ The output project contains:
 rbxsync import-place ./Game.rbxl --output ./GameProject --force
 rbxsync import-place ./Game.rbxl --output ./GameProject --dry-run
 rbxsync import-place ./Game.rbxl --output ./GameProject --json
+rbxsync import-place ./Game.rbxl --output ./GameProject --dry-run --strict --json
 rbxsync import-place ./Game.rbxl --services Workspace,ServerScriptService
 rbxsync import-place ./Game.rbxl --output ./GameProject --name MyGame --no-tooling
 ```
@@ -106,6 +107,8 @@ Notes:
 - Use `--no-backup --force` only when you intentionally want direct replacement.
 - `--dry-run` parses the file and reports counts without writing files.
 - `--json` prints a machine-readable summary including diagnostics.
+- `--strict` exits non-zero when diagnostics are produced; combine it with
+  `--dry-run --json` for CI validation without writing files.
 
 ## Export a Place Back from Files
 
@@ -210,6 +213,7 @@ If JSON output is needed for scripts or CI, use:
 
 ```bash
 rbxsync import-place ./Game.rbxl --output ./GameProject --force --json
+rbxsync import-place ./Game.rbxl --output ./GameProject --dry-run --strict --json
 ```
 
 Published `--place-id` import and cloud publishing are not implemented in this

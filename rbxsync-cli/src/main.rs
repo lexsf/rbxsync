@@ -327,6 +327,10 @@ enum Commands {
         #[arg(long)]
         dry_run: bool,
 
+        /// Fail if diagnostics are produced
+        #[arg(long)]
+        strict: bool,
+
         /// Emit a machine-readable JSON summary
         #[arg(long)]
         json: bool,
@@ -816,6 +820,7 @@ async fn main() -> Result<()> {
             tooling,
             no_tooling,
             dry_run,
+            strict,
             json,
             quiet,
             include_assets,
@@ -831,8 +836,8 @@ async fn main() -> Result<()> {
                 None
             };
             cmd_import_place(
-                input, output, name, services, terrain, force, backup, tooling, dry_run, json,
-                quiet, asset_mode,
+                input, output, name, services, terrain, force, backup, tooling, dry_run, strict,
+                json, quiet, asset_mode,
             )
             .await?;
         }
@@ -1348,6 +1353,7 @@ async fn cmd_import_place(
     backup_existing_src: bool,
     tooling_override: Option<bool>,
     dry_run: bool,
+    strict: bool,
     json_output: bool,
     quiet: bool,
     asset_mode: AssetMode,
@@ -1421,11 +1427,42 @@ async fn cmd_import_place(
         summarize_raw_terrain(&project_dir, &terrain.data, 0, bytes)
     });
 
+    if strict && !import_result.diagnostics.is_empty() {
+        if json_output {
+            print_import_summary(
+                json_output,
+                false,
+                dry_run,
+                strict,
+                &input_path,
+                &project_dir,
+                import_result.format,
+                import_result.instances.len(),
+                scripts_planned,
+                None,
+                None,
+                &imported_services,
+                &import_result.diagnostics,
+                &tooling_files,
+                false,
+                backup_existing_src,
+                dry_run_asset_summary.as_ref(),
+                dry_run_terrain_summary.as_ref(),
+            )?;
+        }
+        bail!(
+            "{}",
+            import_strict_error_message(&import_result.diagnostics)
+        );
+    }
+
     if dry_run {
         if json_output || !quiet {
             print_import_summary(
                 json_output,
                 true,
+                true,
+                strict,
                 &input_path,
                 &project_dir,
                 import_result.format,
@@ -1505,7 +1542,9 @@ async fn cmd_import_place(
     if json_output || !quiet {
         print_import_summary(
             json_output,
+            true,
             false,
+            strict,
             &input_path,
             &project_dir,
             import_result.format,
@@ -1820,7 +1859,9 @@ fn tooling_file_names(generate_tooling_files: bool) -> Vec<&'static str> {
 #[allow(clippy::too_many_arguments)]
 fn print_import_summary(
     json_output: bool,
+    success: bool,
     dry_run: bool,
+    strict: bool,
     input_path: &std::path::Path,
     project_dir: &std::path::Path,
     format: rbxsync_core::PlaceFileFormat,
@@ -1841,8 +1882,9 @@ fn print_import_summary(
         println!(
             "{}",
             serde_json::to_string_pretty(&serde_json::json!({
-                "success": true,
+                "success": success,
                 "dryRun": dry_run,
+                "strict": strict,
                 "input": input_path,
                 "output": project_dir,
                 "format": format,
@@ -1868,6 +1910,9 @@ fn print_import_summary(
     println!("Format: {:?}", format);
     if dry_run {
         println!("Dry run: no files written");
+    }
+    if strict {
+        println!("Strict: enabled");
     }
     println!(
         "Imported {} instances across {} services",
@@ -1935,6 +1980,18 @@ fn print_import_summary(
     }
 
     Ok(())
+}
+
+fn import_strict_error_message(diagnostics: &[rbxsync_core::ImportDiagnostic]) -> String {
+    let first_message = diagnostics
+        .first()
+        .map(|diagnostic| diagnostic.message.as_str())
+        .unwrap_or("diagnostics were produced");
+    format!(
+        "Import failed in strict mode with {} diagnostic(s): {}",
+        diagnostics.len(),
+        first_message
+    )
 }
 
 fn diagnostic_summary(diagnostics: &[rbxsync_core::ImportDiagnostic]) -> BTreeMap<String, usize> {
